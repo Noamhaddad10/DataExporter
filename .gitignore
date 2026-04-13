@@ -1,0 +1,16 @@
+/.idea
+__pycache__/
+/logs/
+/mak_logs/
+/encoders/
+/create_PDUEncoder/config.py
+/DataExporterConfig.json
+/dist/
+/build/
+/logger_counter.json
+*.log
+*.exe
+*.spec
+triggers.sql
+UniSimERs.xlsx
+Enums.xlsx
