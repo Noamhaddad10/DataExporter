@@ -262,7 +262,7 @@ class LoggerPduProcessor:
         #     marking_text = "none"
         # self.exporter_marking_text[logger_pdu.pdu.entityID.__str__()] = marking_text.strip("\x00")
         base_data = {
-            "EntityId": f"{logger_pdu.pdu.entityID.simulationAddress.site}:{logger_pdu.pdu.entityID.simulationAddress.application}:{logger_pdu.pdu.entityID.entityNumber}",
+            "EntityId": f"{logger_pdu.pdu.entityID.siteID}:{logger_pdu.pdu.entityID.applicationID}:{logger_pdu.pdu.entityID.entityID}",
             "PacketTime": logger_pdu.packet_time,
             "ExportTimeToDb": float(0),
             "LoggerFile": self.logger_file,
@@ -298,7 +298,7 @@ class LoggerPduProcessor:
         }
         entity_locs = self.replace_nans(entity_locs)
 
-        e_id = f"{logger_pdu.pdu.entityID.simulationAddress.site}:{logger_pdu.pdu.entityID.simulationAddress.application}:{logger_pdu.pdu.entityID.entityNumber}"
+        e_id = f"{logger_pdu.pdu.entityID.siteID}:{logger_pdu.pdu.entityID.applicationID}:{logger_pdu.pdu.entityID.entityID}"
         seconds_partition = math.floor(self.n * entity_locs["PacketTime"])
         if e_id in self.entity_locs_cache:
             if seconds_partition > self.entity_locs_cache[e_id]:
@@ -349,9 +349,9 @@ class LoggerPduProcessor:
         """
         fire_pdu = {
             "EventId": f"{logger_pdu.pdu.eventID.simulationAddress.site}:{logger_pdu.pdu.eventID.simulationAddress.application}:{logger_pdu.pdu.eventID.eventNumber}",
-            "AttackerId": f"{logger_pdu.pdu.firingEntityID.simulationAddress.site}:{logger_pdu.pdu.firingEntityID.simulationAddress.application}:{logger_pdu.pdu.firingEntityID.entityNumber}",
-            "TargetId": f"{logger_pdu.pdu.targetEntityID.simulationAddress.site}:{logger_pdu.pdu.targetEntityID.simulationAddress.application}:{logger_pdu.pdu.targetEntityID.entityNumber}",
-            "MunitionId": f"{logger_pdu.pdu.munitionExpendableID.simulationAddress.site}:{logger_pdu.pdu.munitionExpendableID.simulationAddress.application}:{logger_pdu.pdu.munitionExpendableID.entityNumber}",
+            "AttackerId": f"{logger_pdu.pdu.firingEntityID.siteID}:{logger_pdu.pdu.firingEntityID.applicationID}:{logger_pdu.pdu.firingEntityID.entityID}",
+            "TargetId": f"{logger_pdu.pdu.targetEntityID.siteID}:{logger_pdu.pdu.targetEntityID.applicationID}:{logger_pdu.pdu.targetEntityID.entityID}",
+            "MunitionId": f"{logger_pdu.pdu.munitionExpendableID.siteID}:{logger_pdu.pdu.munitionExpendableID.applicationID}:{logger_pdu.pdu.munitionExpendableID.entityID}",
             "GeoLocationX": logger_pdu.pdu.location.x,
             "GeoLocationY": logger_pdu.pdu.location.y,
             "GeoLocationZ": logger_pdu.pdu.location.z,
@@ -377,11 +377,11 @@ class LoggerPduProcessor:
         """
         munition_type = logger_pdu.pdu.descriptor.munitionType
         detonation_pdu = {
-            "AttackerId": f"{logger_pdu.pdu.firingEntityID.simulationAddress.site}:{logger_pdu.pdu.firingEntityID.simulationAddress.application}:{logger_pdu.pdu.firingEntityID.entityNumber}",
+            "AttackerId": f"{logger_pdu.pdu.firingEntityID.siteID}:{logger_pdu.pdu.firingEntityID.applicationID}:{logger_pdu.pdu.firingEntityID.entityID}",
             "MunitionType":
                 f"{munition_type.entityKind}:{munition_type.domain}:{munition_type.country}:{munition_type.category}:{munition_type.subcategory}:{munition_type.specific}:{munition_type.extra}",
-            "TargetId": f"{logger_pdu.pdu.targetEntityID.simulationAddress.site}:{logger_pdu.pdu.targetEntityID.simulationAddress.application}:{logger_pdu.pdu.targetEntityID.entityNumber}",
-            "MunitionId": f"{logger_pdu.pdu.explodingEntityID.simulationAddress.site}:{logger_pdu.pdu.explodingEntityID.simulationAddress.application}:{logger_pdu.pdu.explodingEntityID.entityNumber}",
+            "TargetId": f"{logger_pdu.pdu.targetEntityID.siteID}:{logger_pdu.pdu.targetEntityID.applicationID}:{logger_pdu.pdu.targetEntityID.entityID}",
+            "MunitionId": f"{logger_pdu.pdu.explodingEntityID.siteID}:{logger_pdu.pdu.explodingEntityID.applicationID}:{logger_pdu.pdu.explodingEntityID.entityID}",
             "EventId": f"{logger_pdu.pdu.eventID.simulationAddress.site}:{logger_pdu.pdu.eventID.simulationAddress.application}:{logger_pdu.pdu.eventID.eventNumber}",
             "GeoVelocityX": logger_pdu.pdu.velocity.x,
             "GeoVelocityY": logger_pdu.pdu.velocity.y,
@@ -456,7 +456,7 @@ class LoggerPduProcessor:
             for i in range(Num_Entity_pluga):
                 Entity_id = logger_pdu.pdu.entityIDs[i]
                 entity_aggregate_pdu = base_data | aggregate_pdu | {
-                    "EntityId": f"{Entity_id.simulationAddress.site}:{Entity_id.simulationAddress.application}:{Entity_id.entityNumber}",
+                    "EntityId": f"{Entity_id.siteID}:{Entity_id.applicationID}:{Entity_id.entityID}",
                 }
                 overall_dicts = [entity_aggregate_pdu]
                 s_id = overall_dicts[0]["EntityId"]
