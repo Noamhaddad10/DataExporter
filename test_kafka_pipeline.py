@@ -3,18 +3,18 @@ test_kafka_pipeline.py
 ======================
 Tests end-to-end du pipeline Kafka DIS.
 
-Ce script couvre 5 scénarios de test :
-  Test 1 — Connectivité Kafka (broker accessible, topic existant)
-  Test 2 — Round-trip Python → Kafka → Python (producer/consumer directs)
-  Test 3 — Pipeline complet : UDP → Kafka → SQL (FirePdu)
-  Test 4 — Charge : N messages, zéro perte, throughput
-  Test 5 — Résilience : perte d'un consumer, reprise sans perte
+Ce script couvre 5 scenarios de test :
+  Test 1 -- Connectivite Kafka (broker accessible, topic existant)
+  Test 2 -- Round-trip Python -> Kafka -> Python (producer/consumer directs)
+  Test 3 -- Pipeline complet : UDP -> Kafka -> SQL (FirePdu)
+  Test 4 -- Charge : N messages, zero perte, throughput
+  Test 5 -- Resilience : perte d'un consumer, reprise sans perte
 
 Usage :
-    # Tous les tests (kafka_main.py doit tourner en parallèle pour Test 3+)
+    # Tous les tests (kafka_main.py doit tourner en parallele pour Test 3+)
     python test_kafka_pipeline.py
 
-    # Un test précis
+    # Un test precis
     python test_kafka_pipeline.py --test 3
 
     # Mode charge (Test 4)
@@ -64,7 +64,7 @@ def _section(title: str) -> None:
 
 # ---------------------------------------------------------------------------
 # Construction d'un FirePdu DIS 7 valide (98 bytes)
-# Identique à send_fire_pdu.py mais self-contained pour ce test
+# Identique a send_fire_pdu.py mais self-contained pour ce test
 # ---------------------------------------------------------------------------
 
 EXERCISE_ID = cfg.EXERCISE_ID
@@ -96,7 +96,7 @@ def build_fire_pdu(event_number: int, timestamp: int) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Connexion SQL pour les vérifications
+# Connexion SQL pour les verifications
 # ---------------------------------------------------------------------------
 
 def _get_sql_engine(db_name: str) -> sqlalchemy.engine.Engine:
@@ -113,7 +113,7 @@ def _get_sql_engine(db_name: str) -> sqlalchemy.engine.Engine:
 
 
 def _count_fire_pdu(engine: sqlalchemy.engine.Engine, since: datetime.datetime) -> int:
-    """Compte les lignes dans dis.FirePdu insérées depuis `since`."""
+    """Compte les lignes dans dis.FirePdu inserees depuis `since`."""
     with engine.connect() as conn:
         result = conn.execute(
             sqlalchemy.text(
@@ -125,12 +125,12 @@ def _count_fire_pdu(engine: sqlalchemy.engine.Engine, since: datetime.datetime) 
 
 
 # ---------------------------------------------------------------------------
-# TEST 1 — Connectivité Kafka
+# TEST 1 -- Connectivite Kafka
 # ---------------------------------------------------------------------------
 
 def test_1_kafka_connectivity() -> bool:
-    """Vérifie que le broker Kafka est accessible et que le topic dis.raw existe."""
-    _section("TEST 1 — Connectivité Kafka")
+    """Verifie que le broker Kafka est accessible et que le topic dis.raw existe."""
+    _section("TEST 1 -- Connectivite Kafka")
     passed = True
 
     # 1a. Broker accessible
@@ -140,16 +140,16 @@ def test_1_kafka_connectivity() -> bool:
         _ok(f"Broker accessible : {cfg.KAFKA_BOOTSTRAP}")
     except KafkaException as exc:
         _fail(f"Broker inaccessible : {exc}")
-        _info("Lancez kafka_setup.bat pour démarrer Kafka")
+        _info("Lancez kafka_setup.bat pour demarrer Kafka")
         return False
 
     # 1b. Topic dis.raw existe
     if cfg.KAFKA_TOPIC in metadata.topics:
         topic = metadata.topics[cfg.KAFKA_TOPIC]
-        _ok(f"Topic '{cfg.KAFKA_TOPIC}' trouvé — {len(topic.partitions)} partitions")
+        _ok(f"Topic '{cfg.KAFKA_TOPIC}' trouve -- {len(topic.partitions)} partitions")
     else:
         _fail(f"Topic '{cfg.KAFKA_TOPIC}' introuvable")
-        _info("kafka_setup.bat crée le topic automatiquement")
+        _info("kafka_setup.bat cree le topic automatiquement")
         passed = False
 
     # 1c. Nombre de partitions
@@ -158,58 +158,56 @@ def test_1_kafka_connectivity() -> bool:
         if n == cfg.KAFKA_NUM_PARTITIONS:
             _ok(f"Partitions : {n} (attendu {cfg.KAFKA_NUM_PARTITIONS})")
         else:
-            _warn(f"Partitions : {n} (attendu {cfg.KAFKA_NUM_PARTITIONS}) — déséquilibre consumers/partitions")
+            _warn(f"Partitions : {n} (attendu {cfg.KAFKA_NUM_PARTITIONS}) -- desequilibre consumers/partitions")
 
     return passed
 
 
 # ---------------------------------------------------------------------------
-# TEST 2 — Round-trip Python → Kafka → Python
+# TEST 2 -- Round-trip Python -> Kafka -> Python
 # ---------------------------------------------------------------------------
 
 def test_2_roundtrip() -> bool:
-    """Envoie un message de test et vérifie qu'il est reçu par un consumer."""
-    _section("TEST 2 — Round-trip Python → Kafka → Python")
+    """Envoie un message de test et verifie qu'il est recu par un consumer."""
+    _section("TEST 2 -- Round-trip Python -> Kafka -> Python")
 
-    test_payload = b"DIS-KAFKA-TEST-" + str(time.time()).encode()
+    from confluent_kafka import TopicPartition as TP
 
-    # Producer
+    unique = str(time.time()).encode()
+    test_payload = b"DIS-KAFKA-TEST-" + unique
+    partition = 0
+
+    # 1. Produire
     try:
         producer = Producer(cfg.KAFKA_PRODUCER_CONFIG)
-        producer.produce(cfg.KAFKA_TOPIC, value=test_payload, partition=0)
+        producer.produce(cfg.KAFKA_TOPIC, value=test_payload, partition=partition)
         producer.flush(timeout=10)
-        _ok("Message de test produit dans Kafka")
+        _ok("Message produit dans Kafka partition=0")
     except KafkaException as exc:
         _fail(f"Echec producer : {exc}")
         return False
 
-    # Consumer (groupe de test isolé pour ne pas perturber le pipeline)
-    consumer_cfg = dict(cfg.KAFKA_CONSUMER_CONFIG)
-    consumer_cfg["group.id"] = "dis-test-roundtrip"
-    consumer_cfg["auto.offset.reset"] = "latest"
+    # 2. Lire le high-watermark (offset du dernier message)
+    try:
+        c_check = Consumer({"bootstrap.servers": cfg.KAFKA_BOOTSTRAP, "group.id": "test-wm"})
+        lo, hi = c_check.get_watermark_offsets(TP(cfg.KAFKA_TOPIC, partition), timeout=5)
+        c_check.close()
+        target_offset = hi - 1
+        _ok(f"Watermark partition={partition} : lo={lo} hi={hi} -> lecture offset={target_offset}")
+    except Exception as exc:
+        _fail(f"Impossible de lire les watermarks : {exc}")
+        return False
 
-    consumer = Consumer(consumer_cfg)
-    consumer.subscribe([cfg.KAFKA_TOPIC])
+    # 3. Consommer depuis l'offset exact du message produit
+    consumer = Consumer({
+        "bootstrap.servers": cfg.KAFKA_BOOTSTRAP,
+        "group.id": f"dis-test-rt-{int(time.time())}",
+        "enable.auto.commit": False,
+    })
+    consumer.assign([TP(cfg.KAFKA_TOPIC, partition, target_offset)])
 
-    # Attendre le message (max 15 secondes)
     found = False
-    deadline = time.monotonic() + 15.0
-
-    # D'abord on produit, puis on consomme depuis 'latest'
-    # Pour ce test, on utilise 'earliest' avec un groupe frais
-    consumer.close()
-
-    consumer_cfg["auto.offset.reset"] = "earliest"
-    consumer_cfg["group.id"] = f"dis-test-roundtrip-{int(time.time())}"
-    consumer = Consumer(consumer_cfg)
-
-    # Re-produire et consommer depuis le début pour ce groupe
-    producer.produce(cfg.KAFKA_TOPIC, value=test_payload, partition=0)
-    producer.flush(timeout=5)
-
-    consumer.subscribe([cfg.KAFKA_TOPIC])
-    deadline = time.monotonic() + 15.0
-
+    deadline = time.monotonic() + 10.0
     while time.monotonic() < deadline:
         msg = consumer.poll(timeout=1.0)
         if msg is None:
@@ -218,45 +216,44 @@ def test_2_roundtrip() -> bool:
             if msg.error().code() == KafkaError._PARTITION_EOF:
                 continue
             _fail(f"Erreur consumer : {msg.error()}")
-            consumer.close()
-            return False
-        if test_payload in msg.value():
+            break
+        if unique in msg.value():
             found = True
             break
 
     consumer.close()
 
     if found:
-        _ok("Message reçu par le consumer — round-trip OK")
+        _ok("Message recu par le consumer -- round-trip OK")
         return True
     else:
-        _fail("Message non reçu dans les 15 secondes")
+        _fail("Message non recu dans les 10 secondes")
         return False
 
 
 # ---------------------------------------------------------------------------
-# TEST 3 — Pipeline complet UDP → Kafka → SQL
+# TEST 3 -- Pipeline complet UDP -> Kafka -> SQL
 # ---------------------------------------------------------------------------
 
 def test_3_pipeline(count: int = 20, wait_seconds: int = 15) -> bool:
     """
-    Envoie N FirePdu en UDP et vérifie qu'ils arrivent dans dis.FirePdu.
-    kafka_main.py doit tourner en parallèle.
+    Envoie N FirePdu en UDP et verifie qu'ils arrivent dans dis.FirePdu.
+    kafka_main.py doit tourner en parallele.
     """
-    _section(f"TEST 3 — Pipeline complet (N={count} FirePdu)")
-    _info("PREREQUIS : kafka_main.py doit tourner en parallèle")
+    _section(f"TEST 3 -- Pipeline complet (N={count} FirePdu)")
+    _info("PREREQUIS : kafka_main.py doit tourner en parallele")
 
     # Connexion SQL
     try:
         engine = _get_sql_engine(cfg.DB_NAME)
         with engine.connect():
             pass
-        _ok(f"SQL Server accessible — base={cfg.DB_NAME}")
+        _ok(f"SQL Server accessible -- base={cfg.DB_NAME}")
     except Exception as exc:
         _fail(f"SQL Server inaccessible : {exc}")
         return False
 
-    # Timestamp de référence pour compter uniquement les nouvelles lignes
+    # Timestamp de reference pour compter uniquement les nouvelles lignes
     t_before = datetime.datetime.now()
     count_before = _count_fire_pdu(engine, t_before)
     _info(f"Lignes dis.FirePdu avant le test : {count_before} (depuis {t_before.strftime('%H:%M:%S')})")
@@ -272,40 +269,40 @@ def test_3_pipeline(count: int = 20, wait_seconds: int = 15) -> bool:
 
     sock.close()
     elapsed_send = time.monotonic() - t_send_start
-    _ok(f"{count} FirePdu envoyés en UDP en {elapsed_send*1000:.0f}ms")
+    _ok(f"{count} FirePdu envoyes en UDP en {elapsed_send*1000:.0f}ms")
 
-    # Attendre le traitement Kafka → SQL
+    # Attendre le traitement Kafka -> SQL
     _info(f"Attente du pipeline ({wait_seconds}s)...")
     time.sleep(wait_seconds)
 
-    # Vérification SQL
+    # Verification SQL
     count_after = _count_fire_pdu(engine, t_before)
     received = count_after
 
-    _info(f"Lignes dis.FirePdu trouvées : {received}")
+    _info(f"Lignes dis.FirePdu trouvees : {received}")
 
     if received >= count:
         _ok(f"Pipeline OK : {received}/{count} lignes en SQL")
         return True
     elif received > 0:
-        _warn(f"Pipeline partiel : {received}/{count} lignes reçues — peut-être besoin d'attendre plus")
+        _warn(f"Pipeline partiel : {received}/{count} lignes recues -- peut-etre besoin d'attendre plus")
         return False
     else:
-        _fail("Aucune ligne insérée en SQL — vérifiez que kafka_main.py tourne")
+        _fail("Aucune ligne inseree en SQL -- verifiez que kafka_main.py tourne")
         return False
 
 
 # ---------------------------------------------------------------------------
-# TEST 4 — Charge et throughput
+# TEST 4 -- Charge et throughput
 # ---------------------------------------------------------------------------
 
 def test_4_load(count: int = 50_000, wait_factor: float = 3.0) -> bool:
     """
-    Envoie N messages le plus vite possible et vérifie zéro perte.
-    kafka_main.py doit tourner en parallèle.
+    Envoie N messages le plus vite possible et verifie zero perte.
+    kafka_main.py doit tourner en parallele.
     """
-    _section(f"TEST 4 — Charge (N={count:,} messages)")
-    _info("PREREQUIS : kafka_main.py doit tourner en parallèle")
+    _section(f"TEST 4 -- Charge (N={count:,} messages)")
+    _info("PREREQUIS : kafka_main.py doit tourner en parallele")
 
     try:
         engine = _get_sql_engine(cfg.DB_NAME)
@@ -315,7 +312,7 @@ def test_4_load(count: int = 50_000, wait_factor: float = 3.0) -> bool:
 
     t_before = datetime.datetime.now()
 
-    # Envoi UDP en rafale (aucun délai)
+    # Envoi UDP en rafale (aucun delai)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     base_ts = int(time.time()) & 0xFFFFFFFF
     t_start = time.monotonic()
@@ -327,19 +324,19 @@ def test_4_load(count: int = 50_000, wait_factor: float = 3.0) -> bool:
     sock.close()
     t_send = time.monotonic() - t_start
     send_rate = count / t_send if t_send > 0 else 0
-    _ok(f"{count:,} messages envoyés en {t_send:.2f}s — {send_rate:.0f} msg/s")
+    _ok(f"{count:,} messages envoyes en {t_send:.2f}s -- {send_rate:.0f} msg/s")
 
     # Attente proportionnelle au nombre de messages
     wait_time = max(30, t_send * wait_factor)
     _info(f"Attente traitement ({wait_time:.0f}s)...")
     time.sleep(wait_time)
 
-    # Vérification
+    # Verification
     received = _count_fire_pdu(engine, t_before)
     loss = count - received
     loss_pct = (loss / count * 100) if count > 0 else 0
 
-    _info(f"Envoyés  : {count:,}")
+    _info(f"Envoyes  : {count:,}")
     _info(f"En SQL   : {received:,}")
     _info(f"Perdus   : {loss:,} ({loss_pct:.2f}%)")
 
@@ -348,10 +345,10 @@ def test_4_load(count: int = 50_000, wait_factor: float = 3.0) -> bool:
     _info(f"Throughput end-to-end : {throughput:.0f} msg/s")
 
     if loss == 0:
-        _ok("Zéro perte — TEST PASSÉ")
+        _ok("Zero perte -- TEST PASSE")
         return True
     elif loss_pct < 1.0:
-        _warn(f"Perte < 1% ({loss_pct:.2f}%) — acceptable mais à investiguer")
+        _warn(f"Perte < 1% ({loss_pct:.2f}%) -- acceptable mais a investiguer")
         return False
     else:
         _fail(f"Perte significative : {loss_pct:.2f}%")
@@ -359,24 +356,24 @@ def test_4_load(count: int = 50_000, wait_factor: float = 3.0) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# TEST 5 — Résilience
+# TEST 5 -- Resilience
 # ---------------------------------------------------------------------------
 
 def test_5_resilience(count_per_batch: int = 1000) -> bool:
     """
-    Vérifie que le pipeline survit à la perte d'un consumer.
+    Verifie que le pipeline survit a la perte d'un consumer.
     NOTE : Ce test ne peut pas tuer automatiquement un process externe.
     Il s'agit d'un guide de test manuel.
     """
-    _section("TEST 5 — Résilience (guide de test manuel)")
-    _info("Ce test nécessite une intervention manuelle.")
+    _section("TEST 5 -- Resilience (guide de test manuel)")
+    _info("Ce test necessite une intervention manuelle.")
     print()
-    print("  Procédure :")
+    print("  Procedure :")
     print(f"  1. Envoyez {count_per_batch} messages (ce script le fait)")
     print("  2. Dans le Task Manager ou un terminal, tuez un 'KafkaConsumer' process")
     print("  3. Attendez 10 secondes (Kafka rebalance)")
     print(f"  4. Envoyez {count_per_batch} messages de plus (ce script le fait)")
-    print(f"  5. Vérifiez : {count_per_batch * 2} lignes en SQL")
+    print(f"  5. Verifiez : {count_per_batch * 2} lignes en SQL")
     print()
 
     try:
@@ -395,10 +392,10 @@ def test_5_resilience(count_per_batch: int = 1000) -> bool:
         pkt = build_fire_pdu(i, (base_ts + i) & 0xFFFFFFFF)
         sock.sendto(pkt, ("localhost", cfg.PORT))
     sock.close()
-    _ok(f"Batch 1 envoyé ({count_per_batch} messages)")
+    _ok(f"Batch 1 envoye ({count_per_batch} messages)")
 
     # Pause pour l'action manuelle
-    input(f"\n  >> Tuez maintenant un process 'KafkaConsumer-X' puis appuyez sur Entrée...\n")
+    input(f"\n  >> Tuez maintenant un process 'KafkaConsumer-X' puis appuyez sur Entree...\n")
 
     _info("Attente du rebalancing Kafka (10s)...")
     time.sleep(10)
@@ -411,12 +408,12 @@ def test_5_resilience(count_per_batch: int = 1000) -> bool:
         pkt = build_fire_pdu(i, (base_ts2 + i) & 0xFFFFFFFF)
         sock.sendto(pkt, ("localhost", cfg.PORT))
     sock.close()
-    _ok(f"Batch 2 envoyé ({count_per_batch} messages)")
+    _ok(f"Batch 2 envoye ({count_per_batch} messages)")
 
     _info("Attente traitement (30s)...")
     time.sleep(30)
 
-    # Vérification
+    # Verification
     received = _count_fire_pdu(engine, t_before)
     expected = count_per_batch * 2
 
@@ -424,10 +421,10 @@ def test_5_resilience(count_per_batch: int = 1000) -> bool:
     _info(f"En SQL   : {received:,}")
 
     if received >= expected:
-        _ok(f"Résilience OK : {received}/{expected} messages préservés")
+        _ok(f"Resilience OK : {received}/{expected} messages preserves")
         return True
     else:
-        _warn(f"Résultat partiel : {received}/{expected} — le rebalancing peut prendre plus de temps")
+        _warn(f"Resultat partiel : {received}/{expected} -- le rebalancing peut prendre plus de temps")
         return False
 
 
@@ -439,15 +436,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Tests end-to-end pipeline Kafka DIS")
     parser.add_argument(
         "--test", type=int, default=0,
-        help="Numéro du test à exécuter (0 = tous, 1-5 = test spécifique)"
+        help="Numero du test a executer (0 = tous, 1-5 = test specifique)"
     )
     parser.add_argument(
         "--count", type=int, default=20,
-        help="Nombre de messages pour Test 3 et 4 (défaut: 20)"
+        help="Nombre de messages pour Test 3 et 4 (defaut: 20)"
     )
     parser.add_argument(
         "--wait", type=int, default=15,
-        help="Secondes d'attente après envoi pour Test 3 (défaut: 15)"
+        help="Secondes d'attente apres envoi pour Test 3 (defaut: 15)"
     )
     args = parser.parse_args()
 
@@ -462,7 +459,7 @@ def main() -> None:
     results = {}
 
     tests_to_run = [args.test] if args.test != 0 else [1, 2, 3, 4]
-    # Test 5 est manuel, on l'inclut seulement si demandé explicitement
+    # Test 5 est manuel, on l'inclut seulement si demande explicitement
     if args.test == 5:
         tests_to_run = [5]
 
@@ -491,12 +488,12 @@ def main() -> None:
         print(f"  {status} Test {test_num}")
 
     print()
-    print(f"  Résultat : {passed}/{total} tests passés")
+    print(f"  Resultat : {passed}/{total} tests passes")
     if failed > 0:
-        print(f"  {failed} test(s) échoué(s)")
+        print(f"  {failed} test(s) echoue(s)")
         sys.exit(1)
     else:
-        print("  Tous les tests sont passés !")
+        print("  Tous les tests sont passes !")
         sys.exit(0)
 
 
