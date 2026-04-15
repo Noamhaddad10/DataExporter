@@ -31,6 +31,24 @@ class LoggerPDU:
 
         self.interpret_logger_line(logger_line)
 
+    @classmethod
+    def from_parts(cls, pdu_data: bytes, packet_time: float) -> "LoggerPDU":
+        """
+        Construit un LoggerPDU directement depuis les bytes bruts et le packet_time,
+        SANS passer par la serialisation b'line_divider'.
+
+        Fix BUG 2 : elimine tout risque de collision si les bytes du PDU
+        contiennent accidentellement la sequence b'line_divider' (0x6c696e655f646976696465...).
+        Utilise par kafka_consumer.py a la place du constructeur standard.
+
+        :param pdu_data:    bytes bruts du PDU DIS (sans header Kafka)
+        :param packet_time: temps relatif au demarrage du pipeline (float)
+        """
+        obj = cls.__new__(cls)
+        obj.pdu = createPdu(pdu_data)
+        obj.packet_time = packet_time
+        return obj
+
     def interpret_logger_line(self, logger_line: bytes):
         """
         Unpacks a line received from the logger into the object
@@ -308,7 +326,6 @@ class LoggerPduProcessor:
         else:
             self.entity_locs_cache[e_id] = seconds_partition
             self.queue.put(("EntityLocations", [entity_locs]))
-        print(f"process {os.getpid()} count_parsing : {count_parsing} ")
 
     def _entities(self, logger_pdu: LoggerPDU, base_data: dict):
         """

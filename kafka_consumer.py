@@ -190,25 +190,18 @@ def run_consumer(
                 continue
 
             # ----------------------------------------------------------------
-            # 5. Construction du format LoggerPDU
+            # 5. Construction du LoggerPDU via from_parts()
             #
-            #    LoggerPDU.__init__() attend :
-            #        pdu_data + b"line_divider" + struct.pack("d", packet_time)
-            #
-            #    ATTENTION : struct.pack("d", ...) est en native endian ici,
-            #    conformement au format lu par LoggerPDU.interpret_logger_line().
-            #    Le message Kafka utilise "!d" (big-endian) mais la conversion
-            #    est faite ici : on repasse en native endian pour LoggerPDU.
+            #    Fix BUG 2 : on bypasse entierement la serialisation
+            #    b"line_divider" pour eliminer tout risque de collision si
+            #    les bytes du PDU contiennent accidentellement cette sequence.
+            #    LoggerPDU.from_parts() cree l'objet directement depuis
+            #    les bytes bruts et le packet_time.
             # ----------------------------------------------------------------
             try:
-                logger_line: bytes = (
-                    pdu_data
-                    + cfg.KAFKA_LINE_DIVIDER
-                    + struct.pack("d", packet_time)  # native endian, requis par LoggerPDU
-                )
-                received_pdu = LoggerPDU(logger_line)
+                received_pdu = LoggerPDU.from_parts(pdu_data, packet_time)
 
-            except (struct.error, ValueError) as exc:
+            except Exception as exc:
                 log.error(
                     "Consumer %d | Erreur creation LoggerPDU offset=%d : %s",
                     consumer_id, msg.offset(), exc
@@ -376,11 +369,16 @@ def _drain_and_export(
     offset: int,
 ) -> bool:
     """
-    Draine la processing_queue et exporte chaque (table, data) vers SQL.
+    Draine la processing_queue et insere chaque (table, data) en SQL SYNCHRONIQUEMENT.
 
-    Retourne True si tous les exports ont reussi, False sinon.
+    Fix BUG 3 : on utilise lse.insert_sync() au lieu de lse.export() (async).
+    Cela garantit que l'insert SQL est commite en base AVANT que l'appelant
+    commite l'offset Kafka. Sur crash entre insert et commit Kafka : le message
+    sera re-traite (at-least-once), mais AUCUNE donnee ne sera perdue silencieusement.
+
+    Retourne True si tous les inserts ont reussi, False sinon.
     En cas d'echec SQL, on continue de drainer pour ne pas bloquer la queue,
-    mais on retourne False pour indiquer au caller de ne pas commiter l'offset.
+    mais on retourne False pour que l'appelant ne commite PAS l'offset.
 
     Parametres
     ----------
@@ -394,11 +392,17 @@ def _drain_and_export(
     while not processing_queue.empty():
         try:
             table, data = processing_queue.get_nowait()
-            lse.export(table, data)
+            ok = lse.insert_sync(table, data)
+            if not ok:
+                log.error(
+                    "Consumer %d | insert_sync echoue table=%s offset=%d",
+                    consumer_id, table, offset
+                )
+                all_ok = False
         except Exception as exc:
             log.error(
-                "Consumer %d | Erreur export SQL offset=%d table=%s : %s\n%s",
-                consumer_id, offset, table, exc, traceback.format_exc()
+                "Consumer %d | Erreur export SQL offset=%d : %s\n%s",
+                consumer_id, offset, exc, traceback.format_exc()
             )
             all_ok = False
 

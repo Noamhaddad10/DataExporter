@@ -68,15 +68,26 @@ def _section(title: str) -> None:
 # ---------------------------------------------------------------------------
 
 EXERCISE_ID = cfg.EXERCISE_ID
-PDU_LENGTH  = 98
+PDU_LENGTH  = 96  # FIX B1 : 96 bytes, pas 98 — pas de pdu_ext entre header et WarfareFamilyPdu
 
 def build_fire_pdu(event_number: int, timestamp: int) -> bytes:
-    """Construit un FirePdu DIS 7 valide (98 bytes, big-endian)."""
-    pdu_superclass = struct.pack("!BBBBIHH",
-        7, EXERCISE_ID, 2, 2,   # version, exerciseID, pduType, family
-        timestamp, PDU_LENGTH, 0
-    )
-    pdu_ext      = struct.pack("!BB", 0, 0)
+    """Construit un FirePdu DIS 7 valide (96 bytes, big-endian).
+
+    Layout (opendis-compatible, sans pdu_ext) :
+      0-11  : header       !BBBBIHH  (12B)
+      12-23 : warfare      !HHHHHH   (12B)
+      24-29 : munition_id  !HHH      (6B)
+      30-35 : event_id     !HHH      (6B)
+      36-39 : fire_mission !I        (4B)
+      40-63 : location     !ddd      (24B)
+      64-79 : descriptor   !BBHBBBBHHHH (16B)
+      80-91 : velocity     !fff      (12B)
+      92-95 : range        !f        (4B)
+      Total = 96 bytes
+    """
+    header       = struct.pack("!BBBBIHH",
+        7, EXERCISE_ID, 2, 2,
+        timestamp, PDU_LENGTH, 0)
     warfare      = struct.pack("!HHHHHH", 1, 3101, 1, 1, 3101, 2)
     munition_id  = struct.pack("!HHH", 1, 3101, 100)
     event_id     = struct.pack("!HHH", 1, 3101, event_number)
@@ -86,7 +97,7 @@ def build_fire_pdu(event_number: int, timestamp: int) -> bytes:
     velocity     = struct.pack("!fff", 100.0, 0.0, -50.0)
     range_f      = struct.pack("!f", 5000.0)
 
-    packet = (pdu_superclass + pdu_ext + warfare + munition_id
+    packet = (header + warfare + munition_id
               + event_id + fire_mission + location + descriptor
               + velocity + range_f)
 

@@ -1,25 +1,28 @@
 """
 send_fire_pdu.py
 ================
-Simulateur FirePdu DIS 7 (PDU type 2) — construction manuelle via struct.pack.
+Simulateur FirePdu DIS 7 (PDU type 2) -- construction manuelle via struct.pack.
 Envoie des paquets UDP vers le serveur logger.py sur localhost:3000.
 
-NOTE : opendis est utilisé côté serveur pour le PARSING uniquement.
-       Ce script construit les bytes manuellement (sérialisation opendis buggée).
+NOTE : opendis est utilise cote serveur pour le PARSING uniquement.
+       Ce script construit les bytes manuellement (serialisation opendis buggee).
 
-Structure binaire complète — 98 bytes, big-endian (!)
-  PduSuperclass    12 bytes  !BBBBIHH
-  Pdu extension     2 bytes  !BB
-  WarfareFamilyPdu 12 bytes  !HHHHHH
-  munitionExpendibleID  6 bytes  !HHH
+Structure binaire complete -- 96 bytes, big-endian (!)
+  PDU header       12 bytes  !BBBBIHH
+  firingEntityID    6 bytes  !HHH   (WarfareFamilyPdu)
+  targetEntityID    6 bytes  !HHH   (WarfareFamilyPdu)
+  munitionExpendableID  6 bytes  !HHH
   eventID           6 bytes  !HHH
   fireMissionIndex  4 bytes  !I
   location         24 bytes  !ddd
   descriptor       16 bytes  !BBHBBBBHHHH
   velocity         12 bytes  !fff
   range             4 bytes  !f
-                  ─────────
-                   98 bytes
+                  ---------
+                   96 bytes
+
+CORRECTION: Version precedente incluait 2 bytes "pdu_ext" apres le header,
+ce qui decalait tous les champs de 2 bytes et corrompait la serialisation.
 """
 
 import struct
@@ -34,7 +37,7 @@ PORT           = 3000
 EXERCISE_ID    = 9       # Doit correspondre à DataExporterConfig.json → exercise_id
 NUM_MESSAGES   = 10      # Nombre de FirePdu à envoyer
 DELAY_SECONDS  = 0.5     # Délai entre chaque envoi (secondes)
-PDU_LENGTH     = 98      # Taille totale du paquet FirePdu en bytes
+PDU_LENGTH     = 96      # Taille totale du paquet FirePdu en bytes (sans pdu_ext)
 
 # --- Entity IDs ---
 FIRING_SITE,   FIRING_APP,   FIRING_ENTITY   = 1, 3101, 1    # Tireur
@@ -80,45 +83,36 @@ def build_fire_pdu(event_number: int, timestamp: int) -> bytes:
         timestamp    : timestamp DIS 32-bit unsigned
 
     Returns:
-        bytes de 98 octets, big-endian
+        bytes de 96 octets, big-endian
     """
 
     # ----------------------------------------------------------
-    # 1. PduSuperclass — 12 bytes
+    # 1. PDU header — 12 bytes
     #    Format : !BBBBIHH
     #      protocolVersion (B)  exerciseID (B)  pduType (B)  protocolFamily (B)
-    #      timestamp (I)  length (H)  padding (H)
+    #      timestamp (I)  length (H)  pduStatus+padding (H)
     # ----------------------------------------------------------
-    pdu_superclass = struct.pack('!BBBBIHH',
+    header = struct.pack('!BBBBIHH',
         7,            # protocolVersion  — DIS 7 (IEEE 1278.1-2012)
         EXERCISE_ID,  # exerciseID       — filtre du serveur (doit == config)
-        2,            # pduType          — FirePdu = 2  ← filtre serveur packet[2]
+        2,            # pduType          — FirePdu = 2
         2,            # protocolFamily   — Warfare Family = 2
         timestamp,    # timestamp        — 32-bit unsigned big-endian
         PDU_LENGTH,   # length           — taille totale du PDU en bytes
-        0,            # padding          — réservé, = 0
-    )  # → 12 bytes
+        0,            # pduStatus + padding = 0
+    )  # -> 12 bytes
 
     # ----------------------------------------------------------
-    # 2. Pdu extension — 2 bytes
-    #    pduStatus (B)  padding (B)
-    # ----------------------------------------------------------
-    pdu_ext = struct.pack('!BB',
-        0,  # pduStatus — pas de flag particulier
-        0,  # padding
-    )  # → 2 bytes
-
-    # ----------------------------------------------------------
-    # 3. WarfareFamilyPdu — 12 bytes
+    # 2. WarfareFamilyPdu — 12 bytes
     #    firingEntityID (HHH) + targetEntityID (HHH)
     # ----------------------------------------------------------
     warfare = struct.pack('!HHHHHH',
         FIRING_SITE, FIRING_APP, FIRING_ENTITY,  # firingEntityID  : site / app / entity
         TARGET_SITE, TARGET_APP, TARGET_ENTITY,  # targetEntityID  : site / app / entity
-    )  # → 12 bytes
+    )  # -> 12 bytes
 
     # ----------------------------------------------------------
-    # 4. munitionExpendibleID (EntityID) — 6 bytes
+    # 3. munitionExpendableID (EntityID) — 6 bytes
     #    siteID (H)  applicationID (H)  entityID (H)
     # ----------------------------------------------------------
     munition_expendable_id = struct.pack('!HHH',
@@ -179,8 +173,7 @@ def build_fire_pdu(event_number: int, timestamp: int) -> bytes:
 
     # --- Assemblage du paquet complet ---
     packet = (
-          pdu_superclass        # 12
-        + pdu_ext               #  2
+          header                # 12
         + warfare               # 12
         + munition_expendable_id #  6
         + event_id              #  6
@@ -189,7 +182,7 @@ def build_fire_pdu(event_number: int, timestamp: int) -> bytes:
         + descriptor            # 16
         + velocity              # 12
         + range_field           #  4
-    )                           # = 98 bytes
+    )                           # = 96 bytes
 
     # --- Vérifications d'intégrité ---
     assert len(packet) == PDU_LENGTH, (

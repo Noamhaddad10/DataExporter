@@ -128,60 +128,42 @@ class Exporter:
 
     def insert(self, data):
         global count_insert
+        # FIX B3 : logique MAX_TRIES correcte — plus de boucle infinie, plus de rollback manuel,
+        # plus de boucles print(range(10000)).
         MAX_TRIES = 0
         while MAX_TRIES <= 5:
             try:
                 with self.sql_engine.begin() as connection:
                     if self.table_name in self.tracked_tables:
                         start = datetime.datetime.now()
-                        print(f"Exporting: {self.table_name}, start={start}, size ={len(data)}, pid={os.getpid()}")
-                    try:
-                        if self.table_name == "EntityLocations":
-                            count_insert = count_insert + len(data)
-                            print("count_insert: ", count_insert)
-                        connection.execute(self.table.insert(), data)
-                        return
-                    # except SQLAlchemyError:
-                    #     # connection.rollback()
-                    #     print("1")
-                    #     raise
-                    # except Exception as e:
-                    #     print("2")
-                    #     raise
-                    except Exception as e:
-                        msg = str(e).lower()
-                        if not str(e).__contains__('Entities_UIX') and not str(e).__contains__(
-                                'Duplicate key'):  # Check that the error is not because of the unique index on dis.Entities
-                            if str(e).__contains__('deadlocked') or str(e).__contains__('rolled back'):
-                                print("error in the insert try to rollback")
-                                log.info("retry insert ")
-                                connection.rollback()
-                                MAX_TRIES += 1
-                                if MAX_TRIES > 5:
-                                    print("WE LOST A MESSAGE 1------- ")
-                                    table_name = self.table_name
-                                    log.info("data has been lost from the table: ", table_name)
-                                time.sleep(0.05)
-                            else:
-                                print(msg)
-                                log.info(f"error while doing the insert : {data}")
-                                print(f"error has occurred while inserting data: {e} ")
-                                MAX_TRIES = 5
-                        else:
-                            for i in range(10000):
-                                print("error----------", msg)
-                            return
-            except Exception as e:
-                # print(e)
-                connection.rollback()
-                MAX_TRIES += 1
-                for i in range(1000):
-                    print("MAX_TRIES", MAX_TRIES)
-                raise
+                        print(f"Exporting: {self.table_name}, start={start}, size={len(data)}, pid={os.getpid()}")
+                    if self.table_name == "EntityLocations":
+                        count_insert = count_insert + len(data)
+                    connection.execute(self.table.insert(), data)
+                    if self.table_name in self.tracked_tables:
+                        print(f"Done: {self.table_name}, pid={os.getpid()}, time={datetime.datetime.now() - start}")
+                    return  # succes — on sort de la boucle
 
-            if self.table_name in self.tracked_tables:
-                print(
-                    f"Done: {self.table_name}, start={start}, pid={os.getpid()}, time={datetime.datetime.now() - start}")
+            except Exception as e:
+                err_str = str(e)
+                # Duplicate key sur Entities : attendu (unique index), on ignore silencieusement
+                if 'Entities_UIX' in err_str or 'Duplicate key' in err_str:
+                    return
+                # Deadlock SQL Server : retry avec back-off
+                if 'deadlocked' in err_str.lower() or 'rolled back' in err_str.lower():
+                    MAX_TRIES += 1
+                    log.warning(
+                        "Deadlock detecte (tentative %d/5) table=%s -- retry dans 50ms",
+                        MAX_TRIES, self.table_name
+                    )
+                    if MAX_TRIES > 5:
+                        log.error("WE LOST A MESSAGE -- max retries depasse pour table=%s", self.table_name)
+                        return
+                    time.sleep(0.05)
+                else:
+                    # Erreur non-retryable : on log et on abandonne
+                    log.error("Erreur insert table=%s : %s", self.table_name, e)
+                    return
 
 
 class LoggerSQLExporter:
@@ -256,6 +238,44 @@ class LoggerSQLExporter:
             self.exporters[table] = Exporter(self.stop_event, table, self.sql_meta, self.sql_engine,
                                              self.tracked_tables, self.start_time2, self.export_delay, self.export_size)
         self.exporters[table].add_data(d)
+
+    def insert_sync(self, table: str, data: list) -> bool:
+        """
+        Insert SQL synchrone — bypasse le thread timer de add_data().
+        Utilise par kafka_consumer pour garantir : insert SQL reussi AVANT commit offset Kafka.
+        (Fix BUG 3 : offset Kafka commite avant insert SQL)
+
+        Retourne True si l'insert a reussi, False sinon.
+        En cas d'echec, l'appelant ne commite PAS l'offset -> re-traitement au redemarrage.
+        """
+        if table == self.loggers_table:
+            try:
+                Exporter(
+                    self.stop_event, table, sqlalchemy.MetaData(schema="dbo"),
+                    self.sql_engine, self.tracked_tables,
+                    self.start_time2, self.export_delay, self.export_size, data
+                )
+                return True
+            except Exception as exc:
+                log.error("insert_sync Loggers echoue : %s", exc)
+                return False
+
+        if table not in self.exporters:
+            self.exporters[table] = Exporter(
+                self.stop_event, table, self.sql_meta, self.sql_engine,
+                self.tracked_tables, self.start_time2, self.export_delay, self.export_size
+            )
+
+        # Estampille ExportTimeToDb (identique a ce que Exporter.export() fait)
+        ts = datetime.datetime.now().timestamp() - self.start_time2
+        rows = [dict(row, ExportTimeToDb=ts) for row in data]
+
+        try:
+            self.exporters[table].insert(rows)
+            return True
+        except Exception as exc:
+            log.error("insert_sync table=%s echoue : %s", table, exc)
+            return False
 
 
 # def load_file_data(logger_file: str, db_name: str, exercise_id: int, new_db=False, debug=False): #TODO update this function
