@@ -4,7 +4,6 @@ import datetime
 import logging
 import json
 import multiprocessing
-import os
 import struct
 import copy
 import math
@@ -376,7 +375,7 @@ class LoggerPduProcessor:
             "Quantity": logger_pdu.pdu.descriptor.quantity,
             "Rate": logger_pdu.pdu.descriptor.rate,
             "FuseType": logger_pdu.pdu.descriptor.fuse,
-            "WarheadType ": logger_pdu.pdu.descriptor.warhead,
+            "WarheadType": logger_pdu.pdu.descriptor.warhead,
             # "MunitionType": logger_pdu.pdu.descriptor.munitionType,
             "LoggerFile": self.logger_file,
             "WorldTime": datetime.datetime.fromtimestamp(logger_pdu.packet_time + self.start_time),
@@ -412,7 +411,7 @@ class LoggerPduProcessor:
             "Quantity": logger_pdu.pdu.descriptor.quantity,
             "Rate": logger_pdu.pdu.descriptor.rate,
             "FuseType": logger_pdu.pdu.descriptor.fuse,
-            "WarheadType ": logger_pdu.pdu.descriptor.warhead,
+            "WarheadType": logger_pdu.pdu.descriptor.warhead,
             "Result": logger_pdu.pdu.detonationResult,
             "PacketTime": logger_pdu.packet_time,
             "ExportTimeToDb": float(0),

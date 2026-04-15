@@ -130,8 +130,10 @@ class Exporter:
         global count_insert
         # FIX B3 : logique MAX_TRIES correcte — plus de boucle infinie, plus de rollback manuel,
         # plus de boucles print(range(10000)).
-        MAX_TRIES = 0
-        while MAX_TRIES <= 5:
+        MAX_TRIES = 5
+        attempt = 0
+        while attempt < MAX_TRIES:
+            attempt += 1
             try:
                 with self.sql_engine.begin() as connection:
                     if self.table_name in self.tracked_tables:
@@ -151,12 +153,11 @@ class Exporter:
                     return
                 # Deadlock SQL Server : retry avec back-off
                 if 'deadlocked' in err_str.lower() or 'rolled back' in err_str.lower():
-                    MAX_TRIES += 1
                     log.warning(
-                        "Deadlock detecte (tentative %d/5) table=%s -- retry dans 50ms",
-                        MAX_TRIES, self.table_name
+                        "Deadlock detecte (tentative %d/%d) table=%s -- retry dans 50ms",
+                        attempt, MAX_TRIES, self.table_name
                     )
-                    if MAX_TRIES > 5:
+                    if attempt >= MAX_TRIES:
                         log.error("WE LOST A MESSAGE -- max retries depasse pour table=%s", self.table_name)
                         return
                     time.sleep(0.05)

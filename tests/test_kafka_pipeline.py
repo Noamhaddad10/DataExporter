@@ -23,12 +23,18 @@ Usage :
 
 import argparse
 import datetime
+import os
 import socket
 import struct
 import sys
 import time
 import urllib.parse
 from typing import Optional
+
+# Path setup -- permet d'executer depuis tests/ ou depuis la racine
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 import sqlalchemy
 from confluent_kafka import Producer, Consumer, KafkaError, KafkaException
