@@ -1,25 +1,25 @@
 """
 kafka_consumer.py
 =================
-Kafka Consumer -> Parse PDU -> Export SQL.
+Kafka Consumer -> Parse PDU -> SQL Export.
 
-Ce process combine la logique de parsing_messages() + export_process_func()
-de logger.py, en supprimant toute dependance au SharedMemory Ring Buffer.
+This process combines the logic of parsing_messages() + export_process_func()
+from logger.py, removing all dependency on the SharedMemory Ring Buffer.
 
-Chaque instance de ce process :
-  - consomme des messages depuis une ou plusieurs partitions Kafka
-  - deserialise le message : packet_time (8 bytes big-endian) + pdu_raw_data
-  - filtre par pduType et exerciseID
-  - reconstruit le format LoggerPDU attendu par LoggerPduProcessor
-  - appelle lpp.process() -> remplit sa processing_queue locale
-  - draine la processing_queue -> export SQL via LoggerSQLExporter
-  - commite l'offset Kafka APRES l'insert SQL -> zero perte garantie
+Each instance of this process:
+  - consumes messages from one or more Kafka partitions
+  - deserializes the message: packet_time (8 bytes big-endian) + pdu_raw_data
+  - filters by pduType and exerciseID
+  - reconstructs the LoggerPDU format expected by LoggerPduProcessor
+  - calls lpp.process() -> fills its local processing_queue
+  - drains the processing_queue -> SQL export via LoggerSQLExporter
+  - commits the Kafka offset AFTER the SQL insert -> zero data loss guaranteed
 
-IMPORTANT : chaque consumer a ses propres instances de :
-    - LoggerPduProcessor (et ses caches : entity_locs_cache, etc.)
-    - LoggerSQLExporter  (et ses Exporters / threads SQL)
-    - processing_queue   (Queue locale, non partagee)
-Cela evite toute contention entre les consumers paralleles.
+IMPORTANT: each consumer has its own instances of:
+    - LoggerPduProcessor (and its caches: entity_locs_cache, etc.)
+    - LoggerSQLExporter  (and its Exporters / SQL threads)
+    - processing_queue   (local Queue, not shared)
+This avoids any contention between parallel consumers.
 """
 
 import logging
@@ -42,7 +42,7 @@ log = logging.getLogger("kafka_consumer")
 
 
 # ---------------------------------------------------------------------------
-# Fonction principale du process consumer
+# Main consumer process function
 # ---------------------------------------------------------------------------
 def run_consumer(
     consumer_id: int,
@@ -52,35 +52,35 @@ def run_consumer(
     start_time: float,
 ) -> None:
     """
-    Point d'entree du process consumer Kafka.
+    Entry point of the Kafka consumer process.
 
-    Parametres
+    Parameters
     ----------
     consumer_id : int
-        Identifiant unique du consumer (0..N-1), utilise pour les logs.
+        Unique consumer identifier (0..N-1), used in logs.
     stop_event : multiprocessing.Event
-        Signale par kafka_main.py pour declencher le shutdown propre.
+        Set by kafka_main.py to trigger graceful shutdown.
     log_queue : multiprocessing.Queue
-        Queue de logging centralisee.
+        Centralized logging queue.
     logger_file : str
-        Nom du fichier logger courant (ex: "exp_14_4_3.lzma").
-        Injecte par kafka_main.py apres resolution du nom.
+        Current logger file name (e.g. "exp_14_4_3.lzma").
+        Injected by kafka_main.py after name resolution.
     start_time : float
-        Timestamp Unix de demarrage du pipeline.
+        Unix timestamp of pipeline start.
     """
-    # --- Initialisation du logger worker ---
+    # --- Initialize worker logger ---
     _configure_worker_logger(log_queue)
-    log.info("Consumer %d demarre -- PID %d", consumer_id, os.getpid())
+    log.info("Consumer %d started -- PID %d", consumer_id, os.getpid())
     print(f"kafka_consumer[{consumer_id}] PID={os.getpid()}")
 
-    # --- Queue locale (non partagee) pour router les PDU parses vers l'exporter ---
-    # LoggerPduProcessor ecrit dans cette queue via lpp.process()
-    # On la draine immediatement apres chaque message
+    # --- Local queue (not shared) to route parsed PDUs to the exporter ---
+    # LoggerPduProcessor writes to this queue via lpp.process()
+    # We drain it immediately after each message
     processing_queue: Queue = Queue()
 
-    # --- Initialisation de LoggerPduProcessor ---
-    # entity_locations_per_second est distribue entre les consumers
-    # (meme logique que distribute_locs() dans logger.py)
+    # --- Initialize LoggerPduProcessor ---
+    # entity_locations_per_second is distributed across consumers
+    # (same logic as distribute_locs() in logger.py)
     locs_per_sec = max(1, cfg.ENTITY_LOCS_PER_SEC // cfg.KAFKA_NUM_CONSUMERS)
     lpp = LoggerPduProcessor(
         processing_queue,
@@ -90,10 +90,10 @@ def run_consumer(
         process_entities=True,
         process_aggregates=True,
     )
-    log.info("Consumer %d | LoggerPduProcessor initialise", consumer_id)
+    log.info("Consumer %d | LoggerPduProcessor initialized", consumer_id)
 
-    # --- Initialisation de LoggerSQLExporter ---
-    # stop_writing_event local : le consumer le gere lui-meme
+    # --- Initialize LoggerSQLExporter ---
+    # Local stop_writing_event: the consumer manages it itself
     stop_writing_event = multiprocessing.Event()
     lse = LoggerSQLExporter(
         logger_file,
@@ -105,67 +105,67 @@ def run_consumer(
         cfg.EXPORT_SIZE,
         cfg.NEW_DB,
     )
-    log.info("Consumer %d | LoggerSQLExporter initialise", consumer_id)
+    log.info("Consumer %d | LoggerSQLExporter initialized", consumer_id)
 
-    # --- Initialisation du Consumer Kafka ---
+    # --- Initialize Kafka Consumer ---
     consumer = _create_consumer(consumer_id)
 
-    # --- Compteurs pour les stats ---
-    count_consumed: int  = 0   # messages recus depuis Kafka
-    count_exported: int  = 0   # messages exportes vers SQL
-    count_skipped: int   = 0   # messages filtres (mauvais pduType ou exerciseID)
-    count_errors: int    = 0   # erreurs de parsing ou d'export
+    # --- Counters for stats ---
+    count_consumed: int   = 0   # messages received from Kafka
+    count_exported: int   = 0   # messages exported to SQL
+    count_skipped: int    = 0   # messages filtered (wrong pduType or exerciseID)
+    count_errors: int     = 0   # parsing or export errors
     last_stat_time: float = time.monotonic()
 
     try:
-        # S'abonner au topic -> Kafka rebalance les partitions entre les consumers du groupe
+        # Subscribe to topic -> Kafka rebalances partitions among group consumers
         consumer.subscribe([cfg.KAFKA_TOPIC])
-        log.info("Consumer %d | Abonne au topic '%s'", consumer_id, cfg.KAFKA_TOPIC)
+        log.info("Consumer %d | Subscribed to topic '%s'", consumer_id, cfg.KAFKA_TOPIC)
 
         while not stop_event.is_set():
             # ----------------------------------------------------------------
-            # 1. Poll Kafka -- timeout 1.0s pour verifier stop_event regulierement
+            # 1. Poll Kafka -- timeout 1.0s to check stop_event periodically
             # ----------------------------------------------------------------
             msg = consumer.poll(timeout=1.0)
 
             if msg is None:
-                # Aucun message disponible dans le timeout -> on reboucle
+                # No message available within timeout -> loop back
                 continue
 
             # ----------------------------------------------------------------
-            # 2. Gestion des erreurs Kafka au niveau message
+            # 2. Handle Kafka-level message errors
             # ----------------------------------------------------------------
             if msg.error():
                 _handle_kafka_error(consumer_id, msg.error())
                 continue
 
             # ----------------------------------------------------------------
-            # 3. Deserialisation du message Kafka
+            # 3. Deserialize Kafka message
             #
-            #    Format : [packet_time 8 bytes big-endian] + [pdu_raw N bytes]
-            #    Le producer a package avec struct.pack("!d", packet_time).
+            #    Format: [packet_time 8 bytes big-endian] + [pdu_raw N bytes]
+            #    The producer packed it with struct.pack("!d", packet_time).
             # ----------------------------------------------------------------
             try:
                 value: bytes = msg.value()
 
                 if len(value) < cfg.KAFKA_MSG_HEADER_SIZE:
                     log.warning(
-                        "Consumer %d | Message trop court (%d bytes) -- ignore",
+                        "Consumer %d | Message too short (%d bytes) -- ignored",
                         consumer_id, len(value)
                     )
                     count_skipped += 1
                     _safe_commit(consumer, consumer_id)
                     continue
 
-                # Lecture du packet_time (big-endian, 8 bytes)
+                # Read packet_time (big-endian, 8 bytes)
                 packet_time: float = struct.unpack("!d", value[:cfg.KAFKA_MSG_HEADER_SIZE])[0]
 
-                # Bytes bruts du PDU DIS
+                # Raw bytes of the DIS PDU
                 pdu_data: bytes = value[cfg.KAFKA_MSG_HEADER_SIZE:]
 
             except struct.error as exc:
                 log.error(
-                    "Consumer %d | Erreur deserialisation message offset=%d : %s",
+                    "Consumer %d | Deserialization error at offset=%d: %s",
                     consumer_id, msg.offset(), exc
                 )
                 count_errors += 1
@@ -173,13 +173,13 @@ def run_consumer(
                 continue
 
             # ----------------------------------------------------------------
-            # 4. Filtre rapide sur pduType (byte[2] du PDU DIS)
-            #    Evite de creer un LoggerPDU pour les types non supportes.
+            # 4. Quick filter on pduType (byte[2] of DIS PDU)
+            #    Avoids creating a LoggerPDU for unsupported types.
             # ----------------------------------------------------------------
             try:
                 pdu_type: int = pdu_data[2]
             except IndexError:
-                log.warning("Consumer %d | PDU trop court -- ignore", consumer_id)
+                log.warning("Consumer %d | PDU too short -- ignored", consumer_id)
                 count_skipped += 1
                 _safe_commit(consumer, consumer_id)
                 continue
@@ -190,20 +190,20 @@ def run_consumer(
                 continue
 
             # ----------------------------------------------------------------
-            # 5. Construction du LoggerPDU via from_parts()
+            # 5. Build LoggerPDU via from_parts()
             #
-            #    Fix BUG 2 : on bypasse entierement la serialisation
-            #    b"line_divider" pour eliminer tout risque de collision si
-            #    les bytes du PDU contiennent accidentellement cette sequence.
-            #    LoggerPDU.from_parts() cree l'objet directement depuis
-            #    les bytes bruts et le packet_time.
+            #    Fix BUG 2: bypasses b"line_divider" serialization entirely
+            #    to eliminate any collision risk if PDU bytes accidentally
+            #    contain that sequence.
+            #    LoggerPDU.from_parts() creates the object directly from
+            #    raw bytes and packet_time.
             # ----------------------------------------------------------------
             try:
                 received_pdu = LoggerPDU.from_parts(pdu_data, packet_time)
 
             except Exception as exc:
                 log.error(
-                    "Consumer %d | Erreur creation LoggerPDU offset=%d : %s",
+                    "Consumer %d | Error creating LoggerPDU at offset=%d: %s",
                     consumer_id, msg.offset(), exc
                 )
                 count_errors += 1
@@ -211,8 +211,8 @@ def run_consumer(
                 continue
 
             # ----------------------------------------------------------------
-            # 6. Filtre sur exerciseID
-            #    Identique au filtre de parsing_messages() dans logger.py.
+            # 6. Filter on exerciseID
+            #    Identical to the filter in parsing_messages() in logger.py.
             # ----------------------------------------------------------------
             if received_pdu.pdu is None:
                 count_skipped += 1
@@ -225,14 +225,14 @@ def run_consumer(
                 continue
 
             # ----------------------------------------------------------------
-            # 7. Traitement du PDU par LoggerPduProcessor
-            #    Remplit processing_queue avec (table_name, [dict_data])
+            # 7. Process PDU via LoggerPduProcessor
+            #    Fills processing_queue with (table_name, [dict_data])
             # ----------------------------------------------------------------
             try:
                 lpp.process(received_pdu)
             except Exception as exc:
                 log.error(
-                    "Consumer %d | Erreur lpp.process() offset=%d : %s\n%s",
+                    "Consumer %d | Error in lpp.process() at offset=%d: %s\n%s",
                     consumer_id, msg.offset(), exc, traceback.format_exc()
                 )
                 count_errors += 1
@@ -240,11 +240,11 @@ def run_consumer(
                 continue
 
             # ----------------------------------------------------------------
-            # 8. Drainage de la processing_queue -> export SQL
+            # 8. Drain processing_queue -> SQL export
             #
-            #    On exporte TOUT ce que lpp a mis dans la queue avant
-            #    de commiter l'offset Kafka. Garantie : si SQL echoue,
-            #    on ne commite pas -> re-traitement au redemarrage.
+            #    Export everything lpp put in the queue BEFORE committing
+            #    the Kafka offset. Guarantee: if SQL fails, we don't commit
+            #    -> message will be reprocessed on restart.
             # ----------------------------------------------------------------
             sql_ok: bool = _drain_and_export(
                 processing_queue, lse, consumer_id, msg.offset()
@@ -254,22 +254,22 @@ def run_consumer(
             if sql_ok:
                 count_exported += 1
                 # ----------------------------------------------------------------
-                # 9. COMMIT OFFSET Kafka -- synchrone, APRES SQL reussi
-                #    enable.auto.commit=False -> on controle exactement quand
-                #    l'offset est avance.
+                # 9. COMMIT Kafka OFFSET -- synchronous, AFTER successful SQL
+                #    enable.auto.commit=False -> we control exactly when
+                #    the offset advances.
                 # ----------------------------------------------------------------
                 _safe_commit(consumer, consumer_id)
             else:
-                # Export SQL a echoue -> on ne commite pas l'offset
-                # Le consumer reprendra ce message au prochain demarrage
+                # SQL export failed -> do not commit the offset
+                # The consumer will reprocess this message on next start
                 count_errors += 1
                 log.warning(
-                    "Consumer %d | Export SQL echoue pour offset=%d -- offset non commite",
+                    "Consumer %d | SQL export failed for offset=%d -- offset not committed",
                     consumer_id, msg.offset()
                 )
 
             # ----------------------------------------------------------------
-            # 10. Stats toutes les 10 secondes
+            # 10. Stats every 10 seconds
             # ----------------------------------------------------------------
             now = time.monotonic()
             if now - last_stat_time >= 10.0:
@@ -277,8 +277,8 @@ def run_consumer(
                 rate_in  = count_consumed / elapsed if elapsed > 0 else 0
                 rate_out = count_exported / elapsed if elapsed > 0 else 0
                 log.info(
-                    "Consumer %d stats | consommes=%d (%.0f/s) | exportes=%d (%.0f/s) | "
-                    "skippes=%d | erreurs=%d",
+                    "Consumer %d stats | consumed=%d (%.0f/s) | exported=%d (%.0f/s) | "
+                    "skipped=%d | errors=%d",
                     consumer_id,
                     count_consumed, rate_in,
                     count_exported, rate_out,
@@ -286,9 +286,9 @@ def run_consumer(
                 )
                 print(
                     f"[consumer-{consumer_id}] "
-                    f"consommes={count_consumed} ({rate_in:.0f}/s) | "
-                    f"exportes={count_exported} ({rate_out:.0f}/s) | "
-                    f"erreurs={count_errors}"
+                    f"consumed={count_consumed} ({rate_in:.0f}/s) | "
+                    f"exported={count_exported} ({rate_out:.0f}/s) | "
+                    f"errors={count_errors}"
                 )
                 count_consumed = 0
                 count_exported = 0
@@ -297,67 +297,67 @@ def run_consumer(
                 last_stat_time = now
 
     except KafkaException as exc:
-        log.critical("Consumer %d | KafkaException fatale : %s", consumer_id, exc)
-        print(f"[consumer-{consumer_id}] ERREUR FATALE Kafka : {exc}")
+        log.critical("Consumer %d | Fatal KafkaException: %s", consumer_id, exc)
+        print(f"[consumer-{consumer_id}] FATAL Kafka ERROR: {exc}")
 
     except KeyboardInterrupt:
-        log.info("Consumer %d | Interrompu par KeyboardInterrupt", consumer_id)
+        log.info("Consumer %d | Interrupted by KeyboardInterrupt", consumer_id)
 
     finally:
         # ----------------------------------------------------------------
-        # Shutdown propre :
-        # 1. Signaler a LoggerSQLExporter d'arreter ses timers
-        # 2. Fermer le consumer Kafka (commit final des offsets en attente)
+        # Graceful shutdown:
+        # 1. Signal LoggerSQLExporter to stop its timers
+        # 2. Close Kafka consumer (final commit of pending offsets)
         # ----------------------------------------------------------------
-        log.info("Consumer %d | Fermeture en cours...", consumer_id)
-        stop_writing_event.set()  # arret des timers SQL dans LoggerSQLExporter
+        log.info("Consumer %d | Closing...", consumer_id)
+        stop_writing_event.set()  # stop SQL timers in LoggerSQLExporter
 
-        # Dernier drain de la queue avant fermeture
+        # Final drain of the queue before closing
         _drain_and_export(processing_queue, lse, consumer_id, offset=-1)
 
         consumer.close()
         log.info(
-            "Consumer %d | Arrete proprement | total consomme=%d | exporte=%d | erreurs=%d",
+            "Consumer %d | Stopped gracefully | total consumed=%d | exported=%d | errors=%d",
             consumer_id, count_consumed, count_exported, count_errors
         )
-        print(f"[consumer-{consumer_id}] arrete proprement")
+        print(f"[consumer-{consumer_id}] stopped gracefully")
 
 
 # ---------------------------------------------------------------------------
-# Helpers internes
+# Internal helpers
 # ---------------------------------------------------------------------------
 
 def _create_consumer(consumer_id: int) -> Consumer:
     """
-    Cree et retourne un Consumer confluent_kafka configure.
-    Chaque consumer a un client.id unique pour faciliter le monitoring.
+    Creates and returns a configured confluent_kafka Consumer.
+    Each consumer has a unique client.id to facilitate monitoring.
     """
     config = dict(cfg.KAFKA_CONSUMER_CONFIG)
     config["client.id"] = f"dis-consumer-{consumer_id}"
 
     try:
         consumer = Consumer(config)
-        log.info("Consumer %d | Consumer Kafka initialise | bootstrap=%s", consumer_id, cfg.KAFKA_BOOTSTRAP)
+        log.info("Consumer %d | Kafka Consumer initialized | bootstrap=%s", consumer_id, cfg.KAFKA_BOOTSTRAP)
         return consumer
     except KafkaException as exc:
-        log.critical("Impossible de creer le Consumer %d : %s", consumer_id, exc)
+        log.critical("Unable to create Consumer %d: %s", consumer_id, exc)
         raise
 
 
 def _handle_kafka_error(consumer_id: int, error: KafkaError) -> None:
     """
-    Gere les erreurs remontees par consumer.poll().
+    Handles errors returned by consumer.poll().
 
-    - PARTITION_EOF : information normale, pas d'erreur -> on continue silencieusement
-    - Autres erreurs : on log en WARNING (les erreurs transitoires se recuperent seules)
+    - PARTITION_EOF: normal information, not an error -> continue silently
+    - Other errors: log as WARNING (transient errors self-recover)
     """
     if error.code() == KafkaError._PARTITION_EOF:
-        # Fin de partition atteinte -- normal en mode "earliest" quand on a tout lu
-        # On ne log pas pour eviter le spam
+        # End of partition reached -- normal in "earliest" mode when all messages are read
+        # Do not log to avoid spam
         pass
     else:
         log.warning(
-            "Consumer %d | Erreur Kafka : code=%s msg=%s fatal=%s",
+            "Consumer %d | Kafka error: code=%s msg=%s fatal=%s",
             consumer_id, error.code(), error.str(), error.fatal()
         )
 
@@ -369,23 +369,23 @@ def _drain_and_export(
     offset: int,
 ) -> bool:
     """
-    Draine la processing_queue et insere chaque (table, data) en SQL SYNCHRONIQUEMENT.
+    Drains the processing_queue and inserts each (table, data) into SQL SYNCHRONOUSLY.
 
-    Fix BUG 3 : on utilise lse.insert_sync() au lieu de lse.export() (async).
-    Cela garantit que l'insert SQL est commite en base AVANT que l'appelant
-    commite l'offset Kafka. Sur crash entre insert et commit Kafka : le message
-    sera re-traite (at-least-once), mais AUCUNE donnee ne sera perdue silencieusement.
+    Fix BUG 3: uses lse.insert_sync() instead of lse.export() (async).
+    This guarantees that the SQL insert is committed to the database BEFORE the caller
+    commits the Kafka offset. On crash between insert and Kafka commit: the message
+    will be reprocessed (at-least-once), but NO data will be silently lost.
 
-    Retourne True si tous les inserts ont reussi, False sinon.
-    En cas d'echec SQL, on continue de drainer pour ne pas bloquer la queue,
-    mais on retourne False pour que l'appelant ne commite PAS l'offset.
+    Returns True if all inserts succeeded, False otherwise.
+    On SQL failure, we keep draining to avoid blocking the queue,
+    but return False so the caller does NOT commit the offset.
 
-    Parametres
+    Parameters
     ----------
-    processing_queue : Queue -- remplie par lpp.process()
-    lse              : LoggerSQLExporter -- instance du consumer courant
-    consumer_id      : int   -- pour les logs
-    offset           : int   -- offset Kafka courant (pour les logs)
+    processing_queue : Queue -- filled by lpp.process()
+    lse              : LoggerSQLExporter -- current consumer instance
+    consumer_id      : int   -- for logging
+    offset           : int   -- current Kafka offset (for logging)
     """
     all_ok = True
 
@@ -395,13 +395,13 @@ def _drain_and_export(
             ok = lse.insert_sync(table, data)
             if not ok:
                 log.error(
-                    "Consumer %d | insert_sync echoue table=%s offset=%d",
+                    "Consumer %d | insert_sync failed table=%s offset=%d",
                     consumer_id, table, offset
                 )
                 all_ok = False
         except Exception as exc:
             log.error(
-                "Consumer %d | Erreur export SQL offset=%d : %s\n%s",
+                "Consumer %d | SQL export error at offset=%d: %s\n%s",
                 consumer_id, offset, exc, traceback.format_exc()
             )
             all_ok = False
@@ -411,21 +411,21 @@ def _drain_and_export(
 
 def _safe_commit(consumer: Consumer, consumer_id: int) -> None:
     """
-    Effectue un commit synchrone de l'offset courant.
-    Synchrone (asynchronous=False) pour garantir que l'offset est bien
-    persiste avant de continuer.
-    Absorbe les exceptions pour ne pas tuer le consumer sur un echec de commit.
+    Performs a synchronous offset commit.
+    Synchronous (asynchronous=False) to guarantee the offset is persisted
+    before continuing.
+    Absorbs exceptions to avoid killing the consumer on a commit failure.
     """
     try:
         consumer.commit(asynchronous=False)
     except KafkaException as exc:
-        log.warning("Consumer %d | Echec commit offset : %s", consumer_id, exc)
+        log.warning("Consumer %d | Offset commit failed: %s", consumer_id, exc)
 
 
 def _configure_worker_logger(log_queue: Queue) -> None:
     """
-    Configure le logger du process worker pour envoyer vers la QueueHandler.
-    Identique a configure_worker_logger() dans logger.py.
+    Configures the worker process logger to send to QueueHandler.
+    Identical to configure_worker_logger() in logger.py.
     """
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)

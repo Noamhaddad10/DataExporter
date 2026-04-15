@@ -1,19 +1,19 @@
 """
 kafka_producer.py
 =================
-Receiver UDP ultra-rapide -> Kafka Producer.
+High-speed UDP receiver -> Kafka Producer.
 
-Ce process remplace receiving_messages() de logger.py.
-Il ne fait AUCUN parsing : il envoie les bytes bruts + packet_time dans Kafka.
-Le parsing est delegue aux consumers (kafka_consumer.py).
+This process replaces receiving_messages() from logger.py.
+It does NO parsing: it sends raw bytes + packet_time into Kafka.
+Parsing is delegated to the consumers (kafka_consumer.py).
 
-Format du message Kafka :
+Kafka message format:
     struct.pack("!d", packet_time)  [8 bytes, big-endian]
-    + received_data                 [N bytes, bytes bruts UDP]
+    + received_data                 [N bytes, raw UDP bytes]
 
-Partitionnement : pdu_type % NUM_PARTITIONS
-    -> tous les EntityStatePdu vont dans la meme partition
-    -> coherence du cache entity_locs_cache dans chaque consumer
+Partitioning: pdu_type % NUM_PARTITIONS
+    -> all EntityStatePdu go to the same partition
+    -> ensures consistency of entity_locs_cache in each consumer
 """
 
 import datetime
@@ -31,30 +31,30 @@ from confluent_kafka import Producer, KafkaException
 import kafka_config as cfg
 
 # ---------------------------------------------------------------------------
-# Logger (ecrit dans la log_queue du processus parent)
+# Logger (writes to the parent process log_queue)
 # ---------------------------------------------------------------------------
 log = logging.getLogger("kafka_producer")
 
 
 # ---------------------------------------------------------------------------
-# Callback de livraison (appele par producer.poll() dans la boucle principale)
+# Delivery callback (called by producer.poll() in the main loop)
 # ---------------------------------------------------------------------------
 def _delivery_report(err, msg) -> None:
     """
-    Callback appele par confluent_kafka pour chaque message apres tentative d'envoi.
-    En cas d'erreur, on log mais on ne bloque PAS la reception UDP.
-    Les erreurs transitoires (broker indisponible) sont gerees en amont par les retries.
+    Callback invoked by confluent_kafka for each message after a delivery attempt.
+    On error, we log but do NOT block UDP reception.
+    Transient errors (broker unavailable) are handled upstream by retries.
     """
     if err is not None:
         log.error(
-            "Echec livraison Kafka | topic=%s partition=%d offset=%s | err=%s",
+            "Kafka delivery failure | topic=%s partition=%d offset=%s | err=%s",
             msg.topic(), msg.partition(), msg.offset(), err
         )
-    # En cas de succes, on ne log pas (trop verbeux a 20k msg/sec)
+    # On success, we don't log (too verbose at 20k msg/sec)
 
 
 # ---------------------------------------------------------------------------
-# Fonction principale du process producer
+# Main producer process function
 # ---------------------------------------------------------------------------
 def run_producer(
     stop_event: Event,
@@ -62,36 +62,36 @@ def run_producer(
     start_time: float,
 ) -> None:
     """
-    Point d'entree du process UDP receiver + Kafka producer.
+    Entry point of the UDP receiver + Kafka producer process.
 
-    Parametres
+    Parameters
     ----------
     stop_event : multiprocessing.Event
-        Signale par kafka_main.py pour arreter proprement le process.
+        Set by kafka_main.py to trigger graceful shutdown.
     log_queue : multiprocessing.Queue
-        Queue de logging centralisee (QueueHandler -> QueueListener dans main).
+        Centralized logging queue (QueueHandler -> QueueListener in main).
     start_time : float
-        Timestamp Unix de demarrage du pipeline (pour calculer packet_time relatif).
+        Unix timestamp of pipeline start (used to compute relative packet_time).
     """
-    # --- Initialisation du logger worker ---
+    # --- Initialize worker logger ---
     _configure_worker_logger(log_queue)
-    log.info("Producer demarre -- PID %d", os.getpid())
+    log.info("Producer started -- PID %d", os.getpid())
     print(f"kafka_producer PID={os.getpid()}")
 
-    # --- Initialisation du producer Kafka ---
+    # --- Initialize Kafka producer ---
     producer = _create_producer()
 
-    # --- Initialisation du socket UDP ---
+    # --- Initialize UDP socket ---
     sock = _create_udp_socket(cfg.PORT, cfg.MESSAGE_LENGTH)
 
-    # --- Compteurs pour les stats ---
-    count_sent: int     = 0   # messages produits dans Kafka avec succes
-    count_errors: int   = 0   # messages pour lesquels produce() a leve une exception
-    count_buffer_err: int = 0  # BufferError (queue interne Kafka saturee)
+    # --- Counters for stats ---
+    count_sent: int       = 0   # messages successfully produced to Kafka
+    count_errors: int     = 0   # messages where produce() raised an exception
+    count_buffer_err: int = 0   # BufferError (internal Kafka queue full)
     last_stat_time: float = time.monotonic()
 
     log.info(
-        "En ecoute UDP sur port %d | topic=%s | %d partitions",
+        "Listening UDP on port %d | topic=%s | %d partitions",
         cfg.PORT, cfg.KAFKA_TOPIC, cfg.KAFKA_NUM_PARTITIONS
     )
 
@@ -99,137 +99,137 @@ def run_producer(
         while not stop_event.is_set():
             try:
                 # ----------------------------------------------------------------
-                # 1. Reception UDP
-                #    recvfrom() est bloquant jusqu'a l'arrivee d'un datagramme.
-                #    MESSAGE_LENGTH est le buffer max (262144 bytes par defaut).
+                # 1. UDP receive
+                #    recvfrom() blocks until a datagram arrives.
+                #    MESSAGE_LENGTH is the max buffer (262144 bytes by default).
                 # ----------------------------------------------------------------
                 received_data, _addr = sock.recvfrom(cfg.MESSAGE_LENGTH)
 
                 # ----------------------------------------------------------------
-                # 2. Calcul du packet_time relatif
-                #    (secondes ecoulees depuis le demarrage du pipeline)
+                # 2. Compute relative packet_time
+                #    (seconds elapsed since pipeline start)
                 # ----------------------------------------------------------------
                 packet_time: float = datetime.datetime.now().timestamp() - start_time
 
                 # ----------------------------------------------------------------
-                # 3. Construction du message Kafka
-                #    header 8 bytes (packet_time big-endian) + PDU brut
+                # 3. Build Kafka message
+                #    8-byte header (packet_time big-endian) + raw PDU
                 # ----------------------------------------------------------------
                 kafka_value: bytes = struct.pack("!d", packet_time) + received_data
 
                 # ----------------------------------------------------------------
-                # 4. Determination de la partition
-                #    Le 3eme byte du PDU DIS = pduType.
-                #    On regroupe les memes types ensemble -> coherence des caches
-                #    dans les consumers (notamment entity_locs_cache).
+                # 4. Determine partition
+                #    The 3rd byte of the DIS PDU = pduType.
+                #    Group same types together -> consistency of caches
+                #    in consumers (notably entity_locs_cache).
                 # ----------------------------------------------------------------
                 pdu_type: int = received_data[2]
                 partition: int = pdu_type % cfg.KAFKA_NUM_PARTITIONS
 
                 # ----------------------------------------------------------------
-                # 5. Envoi dans Kafka (non-bloquant)
-                #    produce() ajoute dans le buffer interne du producer.
-                #    L'envoi reseau reel se fait via poll() ou flush().
+                # 5. Send to Kafka (non-blocking)
+                #    produce() adds to the producer's internal buffer.
+                #    Actual network send happens via poll() or flush().
                 # ----------------------------------------------------------------
                 _produce_with_retry(producer, kafka_value, partition)
                 count_sent += 1
 
                 # ----------------------------------------------------------------
-                # 6. Traitement des callbacks (livraisons, erreurs)
-                #    poll(0) = non-bloquant : traite tous les callbacks en attente.
+                # 6. Process callbacks (deliveries, errors)
+                #    poll(0) = non-blocking: processes all pending callbacks.
                 # ----------------------------------------------------------------
                 producer.poll(0)
 
             except IndexError:
-                # PDU trop court pour avoir un byte[2] -- on ignore
-                log.warning("PDU trop court recu (%d bytes) -- ignore", len(received_data))
+                # PDU too short to have a byte[2] -- ignore
+                log.warning("Too-short PDU received (%d bytes) -- ignored", len(received_data))
                 continue
             except OSError as exc:
-                # Erreur socket (ex : port deja utilise, interface down)
-                log.error("Erreur socket UDP : %s", exc)
+                # Socket error (e.g. port already in use, interface down)
+                log.error("UDP socket error: %s", exc)
                 count_errors += 1
                 continue
 
             # ----------------------------------------------------------------
-            # 7. Stats toutes les 10 secondes
+            # 7. Stats every 10 seconds
             # ----------------------------------------------------------------
             now = time.monotonic()
             if now - last_stat_time >= 10.0:
                 elapsed = now - last_stat_time
                 rate = count_sent / elapsed if elapsed > 0 else 0
                 log.info(
-                    "Producer stats | envoyes=%d | rate=%.0f msg/s | "
-                    "erreurs=%d | buffer_errors=%d",
+                    "Producer stats | sent=%d | rate=%.0f msg/s | "
+                    "errors=%d | buffer_errors=%d",
                     count_sent, rate, count_errors, count_buffer_err
                 )
                 print(
-                    f"[producer] envoyes={count_sent} | "
+                    f"[producer] sent={count_sent} | "
                     f"rate={rate:.0f} msg/s | "
-                    f"erreurs={count_errors}"
+                    f"errors={count_errors}"
                 )
-                # Reinitialise les compteurs pour la prochaine fenetre de stats
+                # Reset counters for the next stats window
                 count_sent = 0
                 count_errors = 0
                 count_buffer_err = 0
                 last_stat_time = now
 
     except KeyboardInterrupt:
-        log.info("Producer interrompu par KeyboardInterrupt")
+        log.info("Producer interrupted by KeyboardInterrupt")
 
     finally:
         # ----------------------------------------------------------------
-        # Shutdown propre :
-        # flush() attend que tous les messages en buffer soient livres
-        # (ou que le timeout soit atteint).
+        # Graceful shutdown:
+        # flush() waits for all buffered messages to be delivered
+        # (or until the timeout is reached).
         # ----------------------------------------------------------------
-        log.info("Flush du producer Kafka en cours...")
+        log.info("Flushing Kafka producer...")
         remaining = producer.flush(timeout=30)
         if remaining > 0:
             log.warning(
-                "%d messages n'ont pas pu etre livres avant le timeout flush", remaining
+                "%d messages could not be delivered before flush timeout", remaining
             )
         sock.close()
         log.info(
-            "Producer arrete proprement | total envoye=%d | erreurs=%d",
+            "Producer stopped gracefully | total sent=%d | errors=%d",
             count_sent, count_errors
         )
-        print(f"[producer] arrete -- {count_sent} msg envoyes, {count_errors} erreurs")
+        print(f"[producer] stopped -- {count_sent} msg sent, {count_errors} errors")
 
 
 # ---------------------------------------------------------------------------
-# Helpers internes
+# Internal helpers
 # ---------------------------------------------------------------------------
 
 def _create_producer() -> Producer:
     """
-    Cree et retourne un Producer confluent_kafka configure.
-    Leve KafkaException si la connexion initiale au broker echoue.
+    Creates and returns a configured confluent_kafka Producer.
+    Raises KafkaException if the initial broker connection fails.
     """
     try:
         producer = Producer(cfg.KAFKA_PRODUCER_CONFIG)
-        log.info("Producer Kafka initialise | bootstrap=%s", cfg.KAFKA_BOOTSTRAP)
+        log.info("Kafka Producer initialized | bootstrap=%s", cfg.KAFKA_BOOTSTRAP)
         return producer
     except KafkaException as exc:
-        log.critical("Impossible de creer le Producer Kafka : %s", exc)
+        log.critical("Unable to create Kafka Producer: %s", exc)
         raise
 
 
 def _create_udp_socket(port: int, message_length: int) -> socket.socket:
     """
-    Cree un socket UDP avec un buffer de reception de 128 MB.
-    Meme configuration que receiving_messages() dans logger.py original.
+    Creates a UDP socket with a 128 MB receive buffer.
+    Same configuration as receiving_messages() in the original logger.py.
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-    # Buffer OS de 128 MB pour absorber les bursts sans perte au niveau kernel
+    # OS receive buffer of 128 MB to absorb bursts without kernel-level loss
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 128 * 1024 * 1024)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-    # Timeout non-bloquant pour verifier stop_event regulierement
+    # Non-blocking timeout to check stop_event periodically
     sock.settimeout(1.0)
 
     sock.bind(("", port))
-    log.info("Socket UDP lie sur le port %d | buffer=128MB", port)
+    log.info("UDP socket bound on port %d | buffer=128MB", port)
     return sock
 
 
@@ -240,18 +240,18 @@ def _produce_with_retry(
     max_retries: int = 3,
 ) -> None:
     """
-    Tente d'envoyer un message dans Kafka avec retry en cas de BufferError.
+    Attempts to send a message to Kafka with retry on BufferError.
 
-    BufferError survient quand le buffer interne du producer est sature
-    (queue.buffering.max.messages atteint). On appelle poll() pour liberer
-    de la place avant de reessayer.
+    BufferError occurs when the producer's internal buffer is saturated
+    (queue.buffering.max.messages reached). We call poll() to free up
+    space before retrying.
 
-    Parametres
+    Parameters
     ----------
-    producer  : Producer confluent_kafka
-    value     : bytes -- payload du message (packet_time + pdu_raw)
-    partition : int   -- partition cible
-    max_retries : int -- nombre de tentatives avant abandon
+    producer    : Producer confluent_kafka
+    value       : bytes -- message payload (packet_time + pdu_raw)
+    partition   : int   -- target partition
+    max_retries : int   -- number of attempts before giving up
     """
     for attempt in range(max_retries):
         try:
@@ -261,28 +261,28 @@ def _produce_with_retry(
                 partition=partition,
                 on_delivery=_delivery_report,
             )
-            return  # succes
+            return  # success
 
         except BufferError:
-            # Buffer interne sature -> on traite les callbacks en attente
-            # pour liberer de l'espace, puis on reessaie
+            # Internal buffer saturated -> process pending callbacks
+            # to free space, then retry
             log.debug(
-                "BufferError Kafka (tentative %d/%d) -- poll() pour liberer le buffer",
+                "Kafka BufferError (attempt %d/%d) -- poll() to free buffer",
                 attempt + 1, max_retries
             )
-            producer.poll(1)  # bloquant 1 seconde max
+            producer.poll(1)  # blocking up to 1 second
 
-    # Si on arrive ici, toutes les tentatives ont echoue
+    # If we reach here, all attempts failed
     log.error(
-        "Message abandonne apres %d tentatives (BufferError persistant)",
+        "Message dropped after %d attempts (persistent BufferError)",
         max_retries
     )
 
 
 def _configure_worker_logger(log_queue: Queue) -> None:
     """
-    Configure le logger du process worker pour envoyer vers la QueueHandler.
-    Identique a configure_worker_logger() dans logger.py.
+    Configures the worker process logger to send to QueueHandler.
+    Identical to configure_worker_logger() in logger.py.
     """
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)

@@ -1,20 +1,20 @@
 """
 test_intensive.py
 =================
-Suite de tests intensive -- 20 tests couvrant :
-  - Les 5 bugs corriges (B1..B5)
-  - L'integrite structurelle du pipeline
-  - La logique metier (filtres, serialisation, champs SQL)
-  - Les tests d'integration Kafka + SQL (conditionnels)
+Intensive test suite -- 20 tests covering:
+  - The 5 fixed bugs (B1..B5)
+  - Pipeline structural integrity
+  - Business logic (filters, serialization, SQL fields)
+  - Kafka + SQL integration tests (conditional)
 
-Tests UNIT   T01-T15 : sans dependances externes (toujours executes)
-Tests INTEG  T16-T20 : necessitent Kafka + SQL Server (skipped si indisponible)
+Tests UNIT   T01-T15 : no external dependencies (always run)
+Tests INTEG  T16-T20 : require Kafka + SQL Server (skipped if unavailable)
 
-Usage :
-    python test_intensive.py              -- tous les tests
-    python test_intensive.py --unit       -- tests unitaires uniquement
-    python test_intensive.py --integ      -- tests integration uniquement
-    python test_intensive.py --test T07   -- test specifique
+Usage:
+    python test_intensive.py              -- all tests
+    python test_intensive.py --unit       -- unit tests only
+    python test_intensive.py --integ      -- integration tests only
+    python test_intensive.py --test T07   -- specific test
 """
 
 import argparse
@@ -33,14 +33,14 @@ from typing import Optional, Tuple
 from unittest.mock import MagicMock
 
 # ---------------------------------------------------------------------------
-# Path setup -- permet d'executer depuis tests/ ou depuis la racine du projet
+# Path setup -- allows running from tests/ or from the project root
 # ---------------------------------------------------------------------------
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 # ---------------------------------------------------------------------------
-# Resultats
+# Results
 # ---------------------------------------------------------------------------
 PASS = "\033[92m[PASS]\033[0m"
 FAIL = "\033[91m[FAIL]\033[0m"
@@ -71,7 +71,7 @@ def _section(title: str):
 
 
 # ---------------------------------------------------------------------------
-# PDU helpers (96 bytes, identique a send_fire_pdu.py)
+# PDU helpers (96 bytes, identical to send_fire_pdu.py)
 # ---------------------------------------------------------------------------
 EXERCISE_ID    = 9
 FIRING_SITE,  FIRING_APP,  FIRING_ENTITY  = 1, 3101, 1
@@ -106,30 +106,30 @@ def _build_fire_pdu(event_number: int, timestamp: int,
 
 
 # ---------------------------------------------------------------------------
-# T01 : Taille PDU + positions de bytes cles
+# T01: PDU size + key byte positions
 # ---------------------------------------------------------------------------
 def test_T01():
     name = "T01[B1] PDU 96B layout"
     try:
         pkt = _build_fire_pdu(42, 99999)
 
-        assert len(pkt) == 96, f"taille={len(pkt)} attendu=96"
-        assert pkt[0] == 7,            f"protocolVersion={pkt[0]} attendu=7"
-        assert pkt[1] == EXERCISE_ID,  f"exerciseID={pkt[1]} attendu={EXERCISE_ID}"
-        assert pkt[2] == 2,            f"pduType={pkt[2]} attendu=2 (FirePdu)"
-        assert pkt[3] == 2,            f"family={pkt[3]} attendu=2 (Warfare)"
+        assert len(pkt) == 96, f"size={len(pkt)} expected=96"
+        assert pkt[0] == 7,            f"protocolVersion={pkt[0]} expected=7"
+        assert pkt[1] == EXERCISE_ID,  f"exerciseID={pkt[1]} expected={EXERCISE_ID}"
+        assert pkt[2] == 2,            f"pduType={pkt[2]} expected=2 (FirePdu)"
+        assert pkt[3] == 2,            f"family={pkt[3]} expected=2 (Warfare)"
 
         length_field = struct.unpack("!H", pkt[8:10])[0]
-        assert length_field == 96, f"PDU length field={length_field} attendu=96"
+        assert length_field == 96, f"PDU length field={length_field} expected=96"
 
-        # Verifier que firingEntityID est bien a l'offset 12 (pas 14)
+        # Verify that firingEntityID is at offset 12 (not 14)
         site, app, ent = struct.unpack("!HHH", pkt[12:18])
         assert site == FIRING_SITE and app == FIRING_APP and ent == FIRING_ENTITY, \
-            f"firingEntityID=[{site}:{app}:{ent}] attendu=[{FIRING_SITE}:{FIRING_APP}:{FIRING_ENTITY}]"
+            f"firingEntityID=[{site}:{app}:{ent}] expected=[{FIRING_SITE}:{FIRING_APP}:{FIRING_ENTITY}]"
 
-        # Location a l'offset 40
+        # Location at offset 40
         lx, ly, lz = struct.unpack("!ddd", pkt[40:64])
-        assert abs(lx - LOCATION_X) < 0.1, f"location.x={lx} attendu={LOCATION_X}"
+        assert abs(lx - LOCATION_X) < 0.1, f"location.x={lx} expected={LOCATION_X}"
 
         _p(name, True, f"96 bytes, pduType=2, firingEntityID@offset12, location@offset40")
     except AssertionError as e:
@@ -139,7 +139,7 @@ def test_T01():
 
 
 # ---------------------------------------------------------------------------
-# T02 : LoggerPDU.from_parts() -- construction directe sans line_divider
+# T02: LoggerPDU.from_parts() -- direct construction without line_divider
 # ---------------------------------------------------------------------------
 def test_T02():
     name = "T02[B2] LoggerPDU.from_parts() basic"
@@ -154,11 +154,11 @@ def test_T02():
 
         assert pdu_obj.pdu is not None, "pdu is None"
         assert isinstance(pdu_obj.pdu, dis7.FirePdu), \
-            f"type={type(pdu_obj.pdu).__name__} attendu=FirePdu"
+            f"type={type(pdu_obj.pdu).__name__} expected=FirePdu"
         assert pdu_obj.pdu.exerciseID == EXERCISE_ID, \
-            f"exerciseID={pdu_obj.pdu.exerciseID} attendu={EXERCISE_ID}"
+            f"exerciseID={pdu_obj.pdu.exerciseID} expected={EXERCISE_ID}"
         assert abs(pdu_obj.packet_time - packet_time) < 1e-10, \
-            f"packet_time={pdu_obj.packet_time} attendu={packet_time}"
+            f"packet_time={pdu_obj.packet_time} expected={packet_time}"
 
         _p(name, True, f"pdu=FirePdu exerciseID={pdu_obj.pdu.exerciseID} packet_time={pdu_obj.packet_time:.5f}")
     except Exception as e:
@@ -166,70 +166,70 @@ def test_T02():
 
 
 # ---------------------------------------------------------------------------
-# T03 : BUG 2 -- from_parts() immune a la collision b"line_divider"
+# T03: BUG 2 -- from_parts() immune to b"line_divider" collision
 # ---------------------------------------------------------------------------
 def test_T03():
     name = "T03[B2] from_parts() immune collision line_divider"
     try:
         from LoggerPduProcessor import LoggerPDU
 
-        # Construire un PDU valide, puis injecter b"line_divider" dans le payload
-        # On ecrase les bytes de velocity (offset 80) avec la sequence
+        # Build a valid PDU, then inject b"line_divider" into the payload
+        # Overwrite velocity bytes (offset 80) with the sequence
         pkt = bytearray(_build_fire_pdu(1, 12345))
         seq = b"line_divider"  # 12 bytes
-        pkt[80:92] = seq       # injection dans velocity field
+        pkt[80:92] = seq       # inject into velocity field
         pkt_bytes = bytes(pkt)
 
-        # Le constructeur classique DOIT echouer (il y a maintenant 2 occurrences: injected + maybe 0)
-        # On verifie que from_parts() reussit SANS exception
+        # The classic constructor MUST fail (there are now 2 occurrences: injected + maybe 0)
+        # Verify that from_parts() succeeds WITHOUT exception
         crashed_old = False
         try:
             _ = LoggerPDU(pkt_bytes + b"line_divider" + struct.pack("d", 1.0))
         except ValueError:
             crashed_old = True
 
-        # from_parts() ne doit PAS crasher
+        # from_parts() must NOT crash
         pdu_obj = LoggerPDU.from_parts(pkt_bytes, 2.71)
 
-        assert pdu_obj.pdu is not None, "from_parts() a retourne pdu=None"
+        assert pdu_obj.pdu is not None, "from_parts() returned pdu=None"
 
         detail = (
-            f"Ancien constructeur crash sur collision : {crashed_old}\n"
-            f"from_parts() reussit   : True\n"
-            f"Collision eliminee     : OK"
+            f"Old constructor crash on collision: {crashed_old}\n"
+            f"from_parts() succeeded: True\n"
+            f"Collision eliminated: OK"
         )
-        _p(name, True, "from_parts() ne crashe pas, ancien constructeur crashait", detail)
+        _p(name, True, "from_parts() does not crash, old constructor did", detail)
     except Exception as e:
         _p(name, False, str(e), traceback.format_exc())
 
 
 # ---------------------------------------------------------------------------
-# T04 : Confirmer que l'ancien constructeur echoue avec 0 separateurs
+# T04: Confirm that the old constructor fails with 0 separators
 # ---------------------------------------------------------------------------
 def test_T04():
-    name = "T04[B2] Ancien constructeur ValueError sur 0 line_divider"
+    name = "T04[B2] Old constructor ValueError on 0 line_divider"
     try:
         from LoggerPduProcessor import LoggerPDU
 
         pkt = _build_fire_pdu(1, 12345)
-        # Passer des bytes sans line_divider -> ValueError attendue
+        # Pass bytes without line_divider -> ValueError expected
         raised = False
         try:
-            _ = LoggerPDU(pkt)  # pas de line_divider -> ValueError
+            _ = LoggerPDU(pkt)  # no line_divider -> ValueError
         except ValueError:
             raised = True
 
-        assert raised, "Le constructeur aurait du lever ValueError sur des bytes sans line_divider"
-        _p(name, True, "ValueError confirme sur bytes sans line_divider")
+        assert raised, "Constructor should have raised ValueError on bytes without line_divider"
+        _p(name, True, "ValueError confirmed on bytes without line_divider")
     except Exception as e:
         _p(name, False, str(e), traceback.format_exc())
 
 
 # ---------------------------------------------------------------------------
-# T05 : Analyse AST -- insert_sync() present + signature correcte
+# T05: AST analysis -- insert_sync() present + correct signature
 # ---------------------------------------------------------------------------
 def test_T05():
-    name = "T05[B3] insert_sync() present dans LoggerSQLExporter"
+    name = "T05[B3] insert_sync() present in LoggerSQLExporter"
     try:
         with open(os.path.join(_ROOT, "LoggerSQLExporter.py"), "r", encoding="utf-8") as f:
             tree = ast.parse(f.read())
@@ -242,24 +242,24 @@ def test_T05():
                         found = item
                         break
 
-        assert found is not None, "insert_sync() absent de LoggerSQLExporter"
+        assert found is not None, "insert_sync() missing from LoggerSQLExporter"
 
-        # Verifier les arguments : self, table, data
+        # Verify arguments: self, table, data
         args = [a.arg for a in found.args.args]
-        assert "self"  in args, f"arg 'self' manquant: {args}"
-        assert "table" in args, f"arg 'table' manquant: {args}"
-        assert "data"  in args, f"arg 'data' manquant: {args}"
+        assert "self"  in args, f"arg 'self' missing: {args}"
+        assert "table" in args, f"arg 'table' missing: {args}"
+        assert "data"  in args, f"arg 'data' missing: {args}"
 
-        # Verifier qu'il retourne bool (return True / return False presents)
+        # Verify it returns bool (return True / return False present)
         returns = [n for n in ast.walk(found) if isinstance(n, ast.Return)]
         return_values = []
         for r in returns:
             if isinstance(r.value, ast.Constant):
                 return_values.append(r.value.value)
-        assert True  in return_values, "insert_sync() ne retourne jamais True"
-        assert False in return_values, "insert_sync() ne retourne jamais False"
+        assert True  in return_values, "insert_sync() never returns True"
+        assert False in return_values, "insert_sync() never returns False"
 
-        _p(name, True, f"insert_sync(self, table, data) -> bool confirme")
+        _p(name, True, f"insert_sync(self, table, data) -> bool confirmed")
     except AssertionError as e:
         _p(name, False, str(e))
     except Exception as e:
@@ -267,10 +267,10 @@ def test_T05():
 
 
 # ---------------------------------------------------------------------------
-# T06 : kafka_consumer._drain_and_export utilise insert_sync, pas lse.export
+# T06: kafka_consumer._drain_and_export uses insert_sync, not lse.export
 # ---------------------------------------------------------------------------
 def test_T06():
-    name = "T06[B3] _drain_and_export() -> insert_sync, pas lse.export()"
+    name = "T06[B3] _drain_and_export() -> insert_sync, not lse.export()"
     try:
         with open(os.path.join(_ROOT, "kafka_consumer.py"), "r", encoding="utf-8") as f:
             src = f.read()
@@ -282,9 +282,9 @@ def test_T06():
                 drain_func = node
                 break
 
-        assert drain_func is not None, "_drain_and_export() introuvable"
+        assert drain_func is not None, "_drain_and_export() not found"
 
-        # Chercher les appels lse.insert_sync et lse.export dans cette fonction
+        # Look for lse.insert_sync and lse.export calls in this function
         calls_insert_sync = []
         calls_export      = []
 
@@ -297,12 +297,12 @@ def test_T06():
                         if node.func.value.id == "lse":
                             calls_export.append(node)
 
-        assert len(calls_insert_sync) >= 1, "insert_sync() non appele dans _drain_and_export()"
+        assert len(calls_insert_sync) >= 1, "insert_sync() not called in _drain_and_export()"
         assert len(calls_export)      == 0, \
-            f"lse.export() encore appele dans _drain_and_export() ({len(calls_export)} fois)"
+            f"lse.export() still called in _drain_and_export() ({len(calls_export)} times)"
 
         _p(name, True,
-           f"insert_sync appele {len(calls_insert_sync)}x, lse.export() absent")
+           f"insert_sync called {len(calls_insert_sync)}x, lse.export() absent")
     except AssertionError as e:
         _p(name, False, str(e))
     except Exception as e:
@@ -310,10 +310,10 @@ def test_T06():
 
 
 # ---------------------------------------------------------------------------
-# T07 : insert() retry deadlock -- max 5 tentatives puis abandon
+# T07: insert() retry deadlock -- max 5 attempts then give up
 # ---------------------------------------------------------------------------
 def test_T07():
-    name = "T07[B4] insert() retry deadlock (max 5x) sans boucle infinie"
+    name = "T07[B4] insert() retry deadlock (max 5x) no infinite loop"
     try:
         import sqlalchemy
         from LoggerSQLExporter import Exporter
@@ -322,13 +322,13 @@ def test_T07():
         mock_meta   = MagicMock()
         stop_event  = multiprocessing.Event()
 
-        # Configurer le context manager de begin()
+        # Configure the begin() context manager
         ctx = MagicMock()
         ctx.__enter__ = MagicMock(return_value=MagicMock())
-        ctx.__exit__  = MagicMock(return_value=False)  # ne pas supprimer les exceptions
+        ctx.__exit__  = MagicMock(return_value=False)  # do not suppress exceptions
         mock_engine.begin.return_value = ctx
 
-        # Patcher threading.Thread et sqlalchemy.Table pour eviter les side-effects
+        # Patch threading.Thread and sqlalchemy.Table to avoid side-effects
         orig_thread = threading.Thread
         orig_table  = sqlalchemy.Table
         threading.Thread  = MagicMock()
@@ -351,7 +351,7 @@ def test_T07():
 
         exp.sql_engine = mock_engine
 
-        # Simuler un deadlock permanent (6 tentatives)
+        # Simulate a permanent deadlock (6 attempts)
         call_count = [0]
         def always_deadlock(*args, **kwargs):
             call_count[0] += 1
@@ -364,12 +364,12 @@ def test_T07():
         elapsed = time.monotonic() - t_start
 
         assert call_count[0] <= 6, \
-            f"insert() a fait {call_count[0]} tentatives (attendu <= 6)"
+            f"insert() made {call_count[0]} attempts (expected <= 6)"
         assert elapsed < 5.0, \
-            f"insert() a bloque pendant {elapsed:.1f}s (deadlock non resolu en < 5s)"
+            f"insert() blocked for {elapsed:.1f}s (deadlock not resolved in < 5s)"
 
         _p(name, True,
-           f"Arrete apres {call_count[0]} tentatives en {elapsed*1000:.0f}ms (pas de boucle infinie)")
+           f"Stopped after {call_count[0]} attempts in {elapsed*1000:.0f}ms (no infinite loop)")
     except AssertionError as e:
         _p(name, False, str(e))
     except Exception as e:
@@ -377,10 +377,10 @@ def test_T07():
 
 
 # ---------------------------------------------------------------------------
-# T08 : insert() -- cle dupliquee (Entities_UIX) = retour silencieux
+# T08: insert() -- duplicate key (Entities_UIX) = silent return
 # ---------------------------------------------------------------------------
 def test_T08():
-    name = "T08[B4] insert() Entities_UIX = retour silencieux sans erreur"
+    name = "T08[B4] insert() Entities_UIX = silent return without error"
     try:
         import sqlalchemy
         from LoggerSQLExporter import Exporter
@@ -420,14 +420,14 @@ def test_T08():
 
         ctx.__enter__.return_value.execute.side_effect = dup_key
 
-        # insert() doit retourner proprement sans lever d'exception
+        # insert() must return cleanly without raising an exception
         exp.insert([{"EntityId": "1:1:1"}])
 
         assert call_count[0] == 1, \
-            f"insert() a reessaye {call_count[0]}x sur Entities_UIX (devrait retourner apres 1)"
+            f"insert() retried {call_count[0]}x on Entities_UIX (should return after 1)"
 
         _p(name, True,
-           f"Retour apres 1 tentative, pas de retry sur duplicate key")
+           f"Returned after 1 attempt, no retry on duplicate key")
     except AssertionError as e:
         _p(name, False, str(e))
     except Exception as e:
@@ -435,10 +435,10 @@ def test_T08():
 
 
 # ---------------------------------------------------------------------------
-# T09 : insert() -- erreur non-retryable = retour immediat
+# T09: insert() -- non-retryable error = immediate return
 # ---------------------------------------------------------------------------
 def test_T09():
-    name = "T09[B4] insert() erreur non-retryable = retour immediat"
+    name = "T09[B4] insert() non-retryable error = immediate return"
     try:
         import sqlalchemy
         from LoggerSQLExporter import Exporter
@@ -481,9 +481,9 @@ def test_T09():
         exp.insert([{"EventId": "1:1:1"}])
 
         assert call_count[0] == 1, \
-            f"insert() a reessaye {call_count[0]}x sur erreur non-retryable (attendu 1)"
+            f"insert() retried {call_count[0]}x on non-retryable error (expected 1)"
 
-        _p(name, True, f"Retour immediat apres 1 tentative sur erreur non-retryable")
+        _p(name, True, f"Immediate return after 1 attempt on non-retryable error")
     except AssertionError as e:
         _p(name, False, str(e))
     except Exception as e:
@@ -491,26 +491,26 @@ def test_T09():
 
 
 # ---------------------------------------------------------------------------
-# T10 : Filtre exerciseID dans kafka_consumer (lecture du code)
+# T10: exerciseID filter in kafka_consumer (code analysis)
 # ---------------------------------------------------------------------------
 def test_T10():
-    name = "T10 Filtre exerciseID present dans kafka_consumer"
+    name = "T10 exerciseID filter present in kafka_consumer"
     try:
         with open(os.path.join(_ROOT, "kafka_consumer.py"), "r", encoding="utf-8") as f:
             tree = ast.parse(f.read())
 
-        # Chercher la comparaison pdu.exerciseID != cfg.EXERCISE_ID
+        # Look for the comparison pdu.exerciseID != cfg.EXERCISE_ID
         found = False
         for node in ast.walk(tree):
             if isinstance(node, ast.Compare):
-                # Chercher received_pdu.pdu.exerciseID != cfg.EXERCISE_ID
+                # Look for received_pdu.pdu.exerciseID != cfg.EXERCISE_ID
                 left = node.left
                 if (isinstance(left, ast.Attribute) and left.attr == "exerciseID"):
                     found = True
                     break
 
-        assert found, "Comparaison exerciseID introuvable dans kafka_consumer"
-        _p(name, True, "Filtre pdu.exerciseID != cfg.EXERCISE_ID confirme")
+        assert found, "exerciseID comparison not found in kafka_consumer"
+        _p(name, True, "Filter pdu.exerciseID != cfg.EXERCISE_ID confirmed")
     except AssertionError as e:
         _p(name, False, str(e))
     except Exception as e:
@@ -518,22 +518,22 @@ def test_T10():
 
 
 # ---------------------------------------------------------------------------
-# T11 : Filtre pduType -- seuls les types PDU_TYPE_LIST passes
+# T11: pduType filter -- only PDU_TYPE_LIST types passed through
 # ---------------------------------------------------------------------------
 def test_T11():
-    name = "T11 Filtre pduType dans kafka_consumer"
+    name = "T11 pduType filter in kafka_consumer"
     try:
         with open(os.path.join(_ROOT, "kafka_consumer.py"), "r", encoding="utf-8") as f:
             src = f.read()
 
-        # Verifier que pdu_type not in cfg.PDU_TYPE_LIST est present
-        assert "PDU_TYPE_LIST" in src, "PDU_TYPE_LIST non reference dans kafka_consumer"
-        assert "pdu_type" in src, "variable pdu_type absente"
+        # Verify that pdu_type not in cfg.PDU_TYPE_LIST is present
+        assert "PDU_TYPE_LIST" in src, "PDU_TYPE_LIST not referenced in kafka_consumer"
+        assert "pdu_type" in src, "variable pdu_type missing"
 
-        # Verifier que pdu_data[2] est utilise pour extraire pduType
-        assert "pdu_data[2]" in src, "pdu_type extrait de pdu_data[2] absent"
+        # Verify that pdu_data[2] is used to extract pduType
+        assert "pdu_data[2]" in src, "pdu_type extracted from pdu_data[2] missing"
 
-        _p(name, True, "Filtre pduType via pdu_data[2] not in PDU_TYPE_LIST confirme")
+        _p(name, True, "pduType filter via pdu_data[2] not in PDU_TYPE_LIST confirmed")
     except AssertionError as e:
         _p(name, False, str(e))
     except Exception as e:
@@ -541,7 +541,7 @@ def test_T11():
 
 
 # ---------------------------------------------------------------------------
-# T12 : Format message Kafka -- serialisation / deserialisation round-trip
+# T12: Kafka message format -- serialization / deserialization round-trip
 # ---------------------------------------------------------------------------
 def test_T12():
     name = "T12 Kafka message format round-trip (struct pack/unpack)"
@@ -550,18 +550,18 @@ def test_T12():
         pdu_raw = _build_fire_pdu(7, 55555)
         original_time = 12.345678901234
 
-        # Serialisation (comme kafka_producer)
+        # Serialization (as in kafka_producer)
         kafka_value = struct.pack("!d", original_time) + pdu_raw
 
-        # Deserialisation (comme kafka_consumer)
+        # Deserialization (as in kafka_consumer)
         assert len(kafka_value) >= KAFKA_MSG_HEADER_SIZE
         recovered_time = struct.unpack("!d", kafka_value[:KAFKA_MSG_HEADER_SIZE])[0]
         recovered_pdu  = kafka_value[KAFKA_MSG_HEADER_SIZE:]
 
         assert abs(recovered_time - original_time) < 1e-12, \
-            f"packet_time perdu: {recovered_time} vs {original_time}"
-        assert recovered_pdu == pdu_raw, "PDU bytes corrompus apres round-trip"
-        assert recovered_pdu[2] == 2, f"pduType perdu: {recovered_pdu[2]}"
+            f"packet_time lost: {recovered_time} vs {original_time}"
+        assert recovered_pdu == pdu_raw, "PDU bytes corrupted after round-trip"
+        assert recovered_pdu[2] == 2, f"pduType lost: {recovered_pdu[2]}"
 
         _p(name, True,
            f"packet_time={recovered_time:.6f} PDU={len(recovered_pdu)}B pduType=2")
@@ -572,21 +572,21 @@ def test_T12():
 
 
 # ---------------------------------------------------------------------------
-# T13 : from_parts() preserves packet_time avec precision float64
+# T13: from_parts() preserves packet_time with float64 precision
 # ---------------------------------------------------------------------------
 def test_T13():
-    name = "T13 from_parts() precision packet_time float64"
+    name = "T13 from_parts() packet_time float64 precision"
     try:
         from LoggerPduProcessor import LoggerPDU
 
         pkt = _build_fire_pdu(1, 12345)
-        # Valeurs difficiles a arrondir
+        # Values that are hard to round
         for pt in [0.0, 1.0, 0.001, 3.141592653589793, 86399.999999999]:
             obj = LoggerPDU.from_parts(pkt, pt)
             assert abs(obj.packet_time - pt) < 1e-12, \
-                f"packet_time={obj.packet_time} attendu={pt} (diff={abs(obj.packet_time - pt)})"
+                f"packet_time={obj.packet_time} expected={pt} (diff={abs(obj.packet_time - pt)})"
 
-        _p(name, True, "5 valeurs packet_time preservees avec precision < 1e-12")
+        _p(name, True, "5 packet_time values preserved with precision < 1e-12")
     except AssertionError as e:
         _p(name, False, str(e))
     except Exception as e:
@@ -594,24 +594,24 @@ def test_T13():
 
 
 # ---------------------------------------------------------------------------
-# T14 : Analyse AST -- noms de champs dans _process_fire_pdu()
+# T14: AST analysis -- field names in _process_fire_pdu()
 # ---------------------------------------------------------------------------
 def test_T14():
-    name = "T14 Noms champs _process_fire_pdu() (pas de typos critiques)"
+    name = "T14 Field names in _process_fire_pdu() (no critical typos)"
     try:
         with open(os.path.join(_ROOT, "LoggerPduProcessor.py"), "r", encoding="utf-8") as f:
             tree = ast.parse(f.read())
 
-        # Trouver _process_fire_pdu
+        # Find _process_fire_pdu
         func = None
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef) and node.name == "_process_fire_pdu":
                 func = node
                 break
 
-        assert func is not None, "_process_fire_pdu() introuvable"
+        assert func is not None, "_process_fire_pdu() not found"
 
-        # Collecter toutes les cles de dict (ast.Constant dans ast.Dict)
+        # Collect all dict keys (ast.Constant inside ast.Dict)
         keys = []
         for node in ast.walk(func):
             if isinstance(node, ast.Dict):
@@ -619,16 +619,16 @@ def test_T14():
                     if isinstance(k, ast.Constant) and isinstance(k.value, str):
                         keys.append(k.value)
 
-        # Verifier l'absence de typos connus
-        assert "EventId"    in keys, "EventId absent"
-        assert "AttackerId" in keys, "AttackerId absent"
-        assert "TargetId"   in keys, "TargetId absent"
-        assert "Range"      in keys, "Range absent"
-        assert "LoggerFile" in keys, "LoggerFile absent"
-        assert "WorldTime"  in keys, "WorldTime absent"
-        assert "PacketTime" in keys, "PacketTime absent"
+        # Verify absence of known typos
+        assert "EventId"    in keys, "EventId missing"
+        assert "AttackerId" in keys, "AttackerId missing"
+        assert "TargetId"   in keys, "TargetId missing"
+        assert "Range"      in keys, "Range missing"
+        assert "LoggerFile" in keys, "LoggerFile missing"
+        assert "WorldTime"  in keys, "WorldTime missing"
+        assert "PacketTime" in keys, "PacketTime missing"
 
-        # Verifier l'absence du print() hot-path
+        # Verify absence of print() on the hot path
         prints_in_lpp = []
         with open(os.path.join(_ROOT, "LoggerPduProcessor.py"), "r", encoding="utf-8") as f:
             for i, line in enumerate(f, 1):
@@ -637,10 +637,10 @@ def test_T14():
                     prints_in_lpp.append((i, line.strip()))
 
         assert len(prints_in_lpp) == 0, \
-            f"print hot-path encore present : {prints_in_lpp}"
+            f"print hot-path still present: {prints_in_lpp}"
 
-        detail = "Champs: " + ", ".join(keys)
-        _p(name, True, f"{len(keys)} champs valides, print hot-path absent", detail)
+        detail = "Fields: " + ", ".join(keys)
+        _p(name, True, f"{len(keys)} valid fields, print hot-path absent", detail)
     except AssertionError as e:
         _p(name, False, str(e))
     except Exception as e:
@@ -648,10 +648,10 @@ def test_T14():
 
 
 # ---------------------------------------------------------------------------
-# T15 : opendis parse du FirePdu construit -- valeurs champs correctes
+# T15: opendis parsing of built FirePdu -- correct field values
 # ---------------------------------------------------------------------------
 def test_T15():
-    name = "T15 opendis parse FirePdu -- valeurs champs exactes"
+    name = "T15 opendis parse FirePdu -- exact field values"
     try:
         from opendis.PduFactory import createPdu
         import opendis.dis7 as dis7
@@ -682,10 +682,10 @@ def test_T15():
         assert pdu.descriptor.quantity == QUANTITY, f"qty={pdu.descriptor.quantity}"
 
         range_parsed = pdu.range
-        assert abs(range_parsed - RANGE_M) < 1.0, f"range={range_parsed} attendu={RANGE_M}"
+        assert abs(range_parsed - RANGE_M) < 1.0, f"range={range_parsed} expected={RANGE_M}"
 
         _p(name, True,
-           f"FirePdu parse OK: event=77 attacker=1:3101:1 "
+           f"FirePdu parsed OK: event=77 attacker=1:3101:1 "
            f"xyz=({pdu.location.x:.0f},{pdu.location.y:.0f},{pdu.location.z:.0f}) "
            f"warhead={pdu.descriptor.warhead}")
     except AssertionError as e:
@@ -695,7 +695,7 @@ def test_T15():
 
 
 # ---------------------------------------------------------------------------
-# T16 : Integration -- Kafka connectivity
+# T16: Integration -- Kafka connectivity
 # ---------------------------------------------------------------------------
 def test_T16():
     name = "T16[INTEG] Kafka connectivity + topic dis.raw"
@@ -707,24 +707,24 @@ def test_T16():
         meta  = admin.list_topics(timeout=5.0)
 
         assert cfg.KAFKA_TOPIC in meta.topics, \
-            f"Topic '{cfg.KAFKA_TOPIC}' absent (topics: {list(meta.topics.keys())})"
+            f"Topic '{cfg.KAFKA_TOPIC}' missing (topics: {list(meta.topics.keys())})"
 
         n_parts = len(meta.topics[cfg.KAFKA_TOPIC].partitions)
         assert n_parts == cfg.KAFKA_NUM_PARTITIONS, \
-            f"Partitions={n_parts} attendu={cfg.KAFKA_NUM_PARTITIONS}"
+            f"Partitions={n_parts} expected={cfg.KAFKA_NUM_PARTITIONS}"
 
         _p(name, True,
            f"broker={cfg.KAFKA_BOOTSTRAP} topic={cfg.KAFKA_TOPIC} partitions={n_parts}")
     except Exception as e:
         if "timed out" in str(e).lower() or "transport" in str(e).lower() or \
            "broker" in str(e).lower() or "connect" in str(e).lower():
-            _skip(name, f"Kafka indisponible : {e}")
+            _skip(name, f"Kafka unavailable: {e}")
         else:
             _p(name, False, str(e))
 
 
 # ---------------------------------------------------------------------------
-# T17 : Integration -- SQL Server connectivity
+# T17: Integration -- SQL Server connectivity
 # ---------------------------------------------------------------------------
 def test_T17():
     name = "T17[INTEG] SQL Server connectivity"
@@ -747,18 +747,18 @@ def test_T17():
             val = result.scalar()
             assert val == 1
 
-        _p(name, True, f"SQL Server OK base={cfg.DB_NAME}")
+        _p(name, True, f"SQL Server OK database={cfg.DB_NAME}")
     except Exception as e:
         if "cannot open" in str(e).lower() or "login" in str(e).lower() or \
            "network" in str(e).lower() or "odbc" in str(e).lower() or \
            "pyodbc" in str(e).lower():
-            _skip(name, f"SQL Server indisponible : {e}")
+            _skip(name, f"SQL Server unavailable: {e}")
         else:
             _p(name, False, str(e))
 
 
 # ---------------------------------------------------------------------------
-# T18 : Integration -- Round-trip Kafka (producer -> consumer direct, sans kafka_main)
+# T18: Integration -- Kafka round-trip (producer -> consumer direct, without kafka_main)
 # ---------------------------------------------------------------------------
 def test_T18():
     name = "T18[INTEG] Kafka round-trip producer -> consumer direct"
@@ -770,14 +770,14 @@ def test_T18():
         payload   = b"DIS-INTENSIVE-TEST-" + unique_id
         partition = 0
 
-        # Produire
+        # Produce
         prod = Producer(cfg.KAFKA_PRODUCER_CONFIG)
         prod.produce(cfg.KAFKA_TOPIC, value=payload, partition=partition)
         remaining = prod.flush(timeout=10)
         if remaining > 0:
-            _skip(name, f"Kafka indisponible : {remaining} message(s) non livre(s) apres flush")
+            _skip(name, f"Kafka unavailable: {remaining} message(s) not delivered after flush")
             return
-        assert remaining == 0, f"{remaining} messages non livres"
+        assert remaining == 0, f"{remaining} messages not delivered"
 
         # Watermark
         c_wm = Consumer({"bootstrap.servers": cfg.KAFKA_BOOTSTRAP, "group.id": "intensive-wm"})
@@ -786,9 +786,9 @@ def test_T18():
         )
         c_wm.close()
         target = hi - 1
-        assert target >= 0, f"watermark invalide hi={hi}"
+        assert target >= 0, f"invalid watermark hi={hi}"
 
-        # Consommer
+        # Consume
         cons = Consumer({
             "bootstrap.servers": cfg.KAFKA_BOOTSTRAP,
             "group.id": f"intensive-rt-{int(time.time())}",
@@ -811,30 +811,30 @@ def test_T18():
                 break
         cons.close()
 
-        assert found, "Message non recu dans les 10 secondes"
+        assert found, "Message not received within 10 seconds"
         _p(name, True, f"Round-trip OK partition={partition} offset={target}")
     except Exception as e:
         if "timed out" in str(e).lower() or "transport" in str(e).lower() or \
            "broker" in str(e).lower():
-            _skip(name, f"Kafka indisponible : {e}")
+            _skip(name, f"Kafka unavailable: {e}")
         else:
             _p(name, False, str(e), traceback.format_exc())
 
 
 # ---------------------------------------------------------------------------
-# T19 : Integration -- Pipeline UDP -> Kafka -> SQL (kafka_main doit tourner)
+# T19: Integration -- Pipeline UDP -> Kafka -> SQL (kafka_main must be running)
 # ---------------------------------------------------------------------------
 def test_T19():
-    name = "T19[INTEG] Pipeline UDP->Kafka->SQL 200 FirePdu (kafka_main requis)"
+    name = "T19[INTEG] Pipeline UDP->Kafka->SQL 200 FirePdu (kafka_main required)"
     try:
         import kafka_config as cfg
         import sqlalchemy as sa
 
         COUNT      = 200
-        WAIT       = 25   # secondes d'attente pipeline
-        TOLERANCE  = 1    # 1 paquet max (UDP best-effort: 0.5% perte sur burst localhost acceptee)
+        WAIT       = 25   # seconds to wait for the pipeline
+        TOLERANCE  = 1    # 1 packet max (UDP best-effort: 0.5% loss on localhost burst accepted)
 
-        # Connexion SQL
+        # SQL connection
         conn_str = (
             f"DRIVER={{ODBC Driver 17 for SQL Server}};"
             f"SERVER=localhost\\SQLEXPRESS;"
@@ -846,12 +846,12 @@ def test_T19():
             pool_pre_ping=True,
         )
 
-        # Test connexion
+        # Test connection
         try:
             with engine.connect():
                 pass
         except Exception as e:
-            _skip(name, f"SQL indisponible : {e}")
+            _skip(name, f"SQL unavailable: {e}")
             return
 
         # Test Kafka
@@ -860,13 +860,13 @@ def test_T19():
             admin = AdminClient({"bootstrap.servers": cfg.KAFKA_BOOTSTRAP})
             admin.list_topics(timeout=3.0)
         except Exception as e:
-            _skip(name, f"Kafka indisponible : {e}")
+            _skip(name, f"Kafka unavailable: {e}")
             return
 
-        # Timestamp de reference
+        # Reference timestamp
         t_before = datetime.datetime.now()
 
-        # Envoi UDP
+        # Send UDP packets
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         base_ts = int(time.time()) & 0xFFFFFFFF
         t_send = time.monotonic()
@@ -875,11 +875,11 @@ def test_T19():
             sock.sendto(pkt, ("localhost", cfg.PORT))
         sock.close()
         elapsed_send = time.monotonic() - t_send
-        print(f"  {INFO}         {COUNT} paquets envoyes en {elapsed_send*1000:.0f}ms -- attente {WAIT}s...")
+        print(f"  {INFO}         {COUNT} packets sent in {elapsed_send*1000:.0f}ms -- waiting {WAIT}s...")
 
         time.sleep(WAIT)
 
-        # Verification SQL
+        # SQL verification
         with engine.connect() as conn:
             row = conn.execute(sa.text(
                 "SELECT COUNT(*) FROM dis.FirePdu WHERE WorldTime >= :t"
@@ -890,22 +890,22 @@ def test_T19():
         loss_pct = loss / COUNT * 100
 
         detail = (
-            f"Envoyes : {COUNT}\n"
-            f"En SQL  : {received}\n"
-            f"Perdus  : {loss} ({loss_pct:.1f}%)"
+            f"Sent   : {COUNT}\n"
+            f"In SQL : {received}\n"
+            f"Lost   : {loss} ({loss_pct:.1f}%)"
         )
         passed = (loss <= TOLERANCE)
         _p(name, passed,
-           f"{received}/{COUNT} en SQL ({loss_pct:.1f}% perte)", detail)
+           f"{received}/{COUNT} in SQL ({loss_pct:.1f}% loss)", detail)
     except Exception as e:
         _p(name, False, str(e), traceback.format_exc())
 
 
 # ---------------------------------------------------------------------------
-# T20 : insert_sync() -- ExportTimeToDb stampe + retourne True/False
+# T20: insert_sync() -- ExportTimeToDb stamped + returns True/False
 # ---------------------------------------------------------------------------
 def test_T20():
-    name = "T20[B3] insert_sync() ExportTimeToDb stamp + retour bool"
+    name = "T20[B3] insert_sync() ExportTimeToDb stamp + bool return"
     try:
         import sqlalchemy
         from LoggerSQLExporter import LoggerSQLExporter, Exporter
@@ -914,7 +914,7 @@ def test_T20():
         mock_meta   = MagicMock()
         stop_event  = multiprocessing.Event()
 
-        # Configurer le context manager begin()
+        # Configure the begin() context manager
         ctx = MagicMock()
         inserted_rows = []
         def fake_execute(stmt, data):
@@ -925,7 +925,7 @@ def test_T20():
         ctx.__exit__  = MagicMock(return_value=False)
         mock_engine.begin.return_value = ctx
 
-        # Patch sqlalchemy.Table et threading pour LSE + Exporter
+        # Patch sqlalchemy.Table and threading for LSE + Exporter
         orig_thread = threading.Thread
         orig_table  = sqlalchemy.Table
         orig_meta   = sqlalchemy.MetaData
@@ -945,7 +945,7 @@ def test_T20():
                 new_db=False,
             )
             lse.sql_engine   = mock_engine
-            # Injecter un exporter mocke dans les exporters
+            # Inject a mocked exporter into the exporters dict
             mock_exp = MagicMock()
             mock_exp.insert.side_effect = fake_execute
             lse.exporters["FirePdu"] = mock_exp
@@ -954,30 +954,30 @@ def test_T20():
             sqlalchemy.Table  = orig_table
             sqlalchemy.MetaData = orig_meta
 
-        # Test 1 : insert_sync() retourne True sur succes
+        # Test 1: insert_sync() returns True on success
         t_before = time.time()
         mock_exp.insert.reset_mock()
-        mock_exp.insert.side_effect = None  # pas d'erreur
+        mock_exp.insert.side_effect = None  # no error
         result = lse.insert_sync("FirePdu", [{"EventId": "1:2:3", "Range": 100.0}])
-        assert result is True, f"insert_sync() devrait retourner True sur succes, got {result}"
+        assert result is True, f"insert_sync() should return True on success, got {result}"
 
-        # Verifier que ExportTimeToDb a ete ajoute a la row
+        # Verify that ExportTimeToDb was added to the row
         call_args = mock_exp.insert.call_args
-        assert call_args is not None, "insert() jamais appele"
+        assert call_args is not None, "insert() never called"
         rows_sent = call_args[0][0]
         assert len(rows_sent) == 1
-        assert "ExportTimeToDb" in rows_sent[0], "ExportTimeToDb absent de la row"
+        assert "ExportTimeToDb" in rows_sent[0], "ExportTimeToDb missing from the row"
         export_ts = rows_sent[0]["ExportTimeToDb"]
-        assert export_ts >= 0, f"ExportTimeToDb={export_ts} negatif"
-        assert export_ts < 20.0, f"ExportTimeToDb={export_ts} trop grand (start_time 10s ago)"
+        assert export_ts >= 0, f"ExportTimeToDb={export_ts} negative"
+        assert export_ts < 20.0, f"ExportTimeToDb={export_ts} too large (start_time 10s ago)"
 
-        # Test 2 : insert_sync() retourne False sur erreur SQL
+        # Test 2: insert_sync() returns False on SQL error
         mock_exp.insert.side_effect = Exception("SQL Server connection timeout")
         result_fail = lse.insert_sync("FirePdu", [{"EventId": "X"}])
-        assert result_fail is False, f"insert_sync() devrait retourner False sur erreur, got {result_fail}"
+        assert result_fail is False, f"insert_sync() should return False on error, got {result_fail}"
 
         _p(name, True,
-           f"True sur succes | ExportTimeToDb={export_ts:.3f}s | False sur erreur SQL")
+           f"True on success | ExportTimeToDb={export_ts:.3f}s | False on SQL error")
     except AssertionError as e:
         _p(name, False, str(e))
     except Exception as e:
@@ -1017,47 +1017,47 @@ TEST_MAP = {name: fn for name, fn in UNIT_TESTS + INTEG_TESTS}
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Tests intensifs pipeline Kafka DIS")
+    parser = argparse.ArgumentParser(description="Intensive test suite for the Kafka DIS pipeline")
     grp = parser.add_mutually_exclusive_group()
-    grp.add_argument("--unit",  action="store_true", help="Tests unitaires uniquement (T01-T15, T20)")
-    grp.add_argument("--integ", action="store_true", help="Tests integration uniquement (T16-T19)")
-    parser.add_argument("--test", type=str, default="", help="Test specifique (ex: T07)")
+    grp.add_argument("--unit",  action="store_true", help="Unit tests only (T01-T15, T20)")
+    grp.add_argument("--integ", action="store_true", help="Integration tests only (T16-T19)")
+    parser.add_argument("--test", type=str, default="", help="Specific test (e.g.: T07)")
     args = parser.parse_args()
 
     print("\n" + "="*65)
-    print("  test_intensive.py -- Suite de tests Kafka DIS pipeline")
-    print(f"  Date : {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("  test_intensive.py -- Kafka DIS pipeline test suite")
+    print(f"  Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*65)
 
     if args.test:
         t = args.test.upper()
         if t not in TEST_MAP:
-            print(f"Test {t} inconnu. Disponibles: {sorted(TEST_MAP.keys())}")
+            print(f"Unknown test {t}. Available: {sorted(TEST_MAP.keys())}")
             sys.exit(1)
         _section(f"Test {t}")
         TEST_MAP[t]()
 
     elif args.unit:
-        _section("Tests UNITAIRES (T01-T15, T20)")
+        _section("UNIT Tests (T01-T15, T20)")
         for name, fn in UNIT_TESTS:
             fn()
 
     elif args.integ:
-        _section("Tests INTEGRATION (T16-T19)")
+        _section("INTEGRATION Tests (T16-T19)")
         for name, fn in INTEG_TESTS:
             fn()
 
     else:
-        _section("Tests UNITAIRES (T01-T15, T20)")
+        _section("UNIT Tests (T01-T15, T20)")
         for name, fn in UNIT_TESTS:
             fn()
 
-        _section("Tests INTEGRATION (T16-T19)")
+        _section("INTEGRATION Tests (T16-T19)")
         for name, fn in INTEG_TESTS:
             fn()
 
-    # Rapport final
-    _section("RAPPORT FINAL")
+    # Final report
+    _section("FINAL REPORT")
     passed  = [(n, r) for n, r in results if r is True]
     failed  = [(n, r) for n, r in results if r is False]
     skipped = [(n, r) for n, r in results if r is None]
@@ -1067,16 +1067,16 @@ def main():
         print(f"  {tag}  {n}")
 
     print()
-    print(f"  Passes  : {len(passed)}")
-    print(f"  Echecs  : {len(failed)}")
-    print(f"  Skips   : {len(skipped)}")
+    print(f"  Passed  : {len(passed)}")
+    print(f"  Failed  : {len(failed)}")
+    print(f"  Skipped : {len(skipped)}")
     print(f"  Total   : {len(results)}")
 
     if failed:
-        print(f"\n  Tests en echec : {[n for n, _ in failed]}")
+        print(f"\n  Failed tests: {[n for n, _ in failed]}")
         sys.exit(1)
     else:
-        print("\n  Tous les tests executes sont passes !")
+        print("\n  All executed tests passed!")
         sys.exit(0)
 
 

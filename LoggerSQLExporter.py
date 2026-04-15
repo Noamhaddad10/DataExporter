@@ -128,8 +128,8 @@ class Exporter:
 
     def insert(self, data):
         global count_insert
-        # FIX B3 : logique MAX_TRIES correcte — plus de boucle infinie, plus de rollback manuel,
-        # plus de boucles print(range(10000)).
+        # FIX BUG3: correct MAX_TRIES logic -- no infinite loop, no manual rollback,
+        # no print(range(10000)) loops.
         MAX_TRIES = 5
         attempt = 0
         while attempt < MAX_TRIES:
@@ -144,26 +144,26 @@ class Exporter:
                     connection.execute(self.table.insert(), data)
                     if self.table_name in self.tracked_tables:
                         print(f"Done: {self.table_name}, pid={os.getpid()}, time={datetime.datetime.now() - start}")
-                    return  # succes — on sort de la boucle
+                    return  # success -- exit the loop
 
             except Exception as e:
                 err_str = str(e)
-                # Duplicate key sur Entities : attendu (unique index), on ignore silencieusement
+                # Duplicate key on Entities: expected (unique index), ignore silently
                 if 'Entities_UIX' in err_str or 'Duplicate key' in err_str:
                     return
-                # Deadlock SQL Server : retry avec back-off
+                # SQL Server deadlock: retry with back-off
                 if 'deadlocked' in err_str.lower() or 'rolled back' in err_str.lower():
                     log.warning(
-                        "Deadlock detecte (tentative %d/%d) table=%s -- retry dans 50ms",
+                        "Deadlock detected (attempt %d/%d) table=%s -- retry in 50ms",
                         attempt, MAX_TRIES, self.table_name
                     )
                     if attempt >= MAX_TRIES:
-                        log.error("WE LOST A MESSAGE -- max retries depasse pour table=%s", self.table_name)
+                        log.error("WE LOST A MESSAGE -- max retries exceeded for table=%s", self.table_name)
                         return
                     time.sleep(0.05)
                 else:
-                    # Erreur non-retryable : on log et on abandonne
-                    log.error("Erreur insert table=%s : %s", self.table_name, e)
+                    # Non-retryable error: log and give up
+                    log.error("Insert error table=%s: %s", self.table_name, e)
                     return
 
 
@@ -242,12 +242,12 @@ class LoggerSQLExporter:
 
     def insert_sync(self, table: str, data: list) -> bool:
         """
-        Insert SQL synchrone — bypasse le thread timer de add_data().
-        Utilise par kafka_consumer pour garantir : insert SQL reussi AVANT commit offset Kafka.
-        (Fix BUG 3 : offset Kafka commite avant insert SQL)
+        Synchronous SQL insert -- bypasses the add_data() timer thread.
+        Used by kafka_consumer to guarantee: SQL insert committed BEFORE Kafka offset commit.
+        (Fix BUG 3: Kafka offset was committed before SQL insert)
 
-        Retourne True si l'insert a reussi, False sinon.
-        En cas d'echec, l'appelant ne commite PAS l'offset -> re-traitement au redemarrage.
+        Returns True if the insert succeeded, False otherwise.
+        On failure, the caller does NOT commit the offset -> reprocessed on restart.
         """
         if table == self.loggers_table:
             try:
@@ -258,7 +258,7 @@ class LoggerSQLExporter:
                 )
                 return True
             except Exception as exc:
-                log.error("insert_sync Loggers echoue : %s", exc)
+                log.error("insert_sync Loggers failed: %s", exc)
                 return False
 
         if table not in self.exporters:
@@ -267,7 +267,7 @@ class LoggerSQLExporter:
                 self.tracked_tables, self.start_time2, self.export_delay, self.export_size
             )
 
-        # Estampille ExportTimeToDb (identique a ce que Exporter.export() fait)
+        # Stamp ExportTimeToDb (same as what Exporter.export() does)
         ts = datetime.datetime.now().timestamp() - self.start_time2
         rows = [dict(row, ExportTimeToDb=ts) for row in data]
 
@@ -275,7 +275,7 @@ class LoggerSQLExporter:
             self.exporters[table].insert(rows)
             return True
         except Exception as exc:
-            log.error("insert_sync table=%s echoue : %s", table, exc)
+            log.error("insert_sync table=%s failed: %s", table, exc)
             return False
 
 

@@ -167,7 +167,7 @@ C:\kafka\bin\windows\kafka-topics.bat ^
     --bootstrap-server localhost:9092 > nul 2>&1
 
 if %ERRORLEVEL% EQU 0 (
-    echo Topic 'dis.raw' existe deja — ignoré.
+    echo Topic 'dis.raw' already exists -- skipped.
 ) else (
     C:\kafka\bin\windows\kafka-topics.bat ^
         --create ^

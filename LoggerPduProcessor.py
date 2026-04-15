@@ -33,15 +33,15 @@ class LoggerPDU:
     @classmethod
     def from_parts(cls, pdu_data: bytes, packet_time: float) -> "LoggerPDU":
         """
-        Construit un LoggerPDU directement depuis les bytes bruts et le packet_time,
-        SANS passer par la serialisation b'line_divider'.
+        Builds a LoggerPDU directly from raw bytes and packet_time,
+        WITHOUT going through b'line_divider' serialization.
 
-        Fix BUG 2 : elimine tout risque de collision si les bytes du PDU
-        contiennent accidentellement la sequence b'line_divider' (0x6c696e655f646976696465...).
-        Utilise par kafka_consumer.py a la place du constructeur standard.
+        Fix BUG 2: eliminates any collision risk if PDU bytes accidentally
+        contain the sequence b'line_divider' (0x6c696e655f646976696465...).
+        Used by kafka_consumer.py instead of the standard constructor.
 
-        :param pdu_data:    bytes bruts du PDU DIS (sans header Kafka)
-        :param packet_time: temps relatif au demarrage du pipeline (float)
+        :param pdu_data:    raw DIS PDU bytes (without Kafka header)
+        :param packet_time: time relative to pipeline start (float)
         """
         obj = cls.__new__(cls)
         obj.pdu = createPdu(pdu_data)

@@ -1,25 +1,25 @@
 """
 kafka_main.py
 =============
-Nouveau point d'entree du pipeline DIS -> Kafka -> SQL.
+Main entry point of the DIS -> Kafka -> SQL pipeline.
 
-Remplace logger.py comme orchestrateur principal en mode Kafka.
-logger.py reste intact comme fallback (mode SharedMemory Ring Buffer).
+Replaces logger.py as the primary orchestrator in Kafka mode.
+logger.py remains intact as a fallback (SharedMemory Ring Buffer mode).
 
-Pipeline :
-    1. Verification des prerequis (Kafka broker, SQL Server)
-    2. Resolution du nom du fichier logger (meme logique que logger.py)
-    3. Insertion de la ligne de demarrage dans dbo.Loggers
-    4. Lancement du producer UDP->Kafka (1 Process)
-    5. Lancement des consumers Kafka->SQL (N Process)
-    6. Boucle principale avec stats toutes les 5 secondes
-    7. Graceful shutdown sur Ctrl+C
+Pipeline:
+    1. Prerequisites check (Kafka broker, SQL Server)
+    2. Logger file name resolution (same logic as logger.py)
+    3. Startup row insertion into dbo.Loggers
+    4. Launch of the UDP->Kafka producer (1 Process)
+    5. Launch of the Kafka->SQL consumers (N Processes)
+    6. Main loop with stats every 5 seconds
+    7. Graceful shutdown on Ctrl+C
 
-Graceful shutdown :
-    - stop_event signale -> tous les processes l'observent
-    - Les consumers finissent le message en cours et commitent l'offset
-    - Le producer flush() tous les messages en attente
-    - On attend la fin de tous les processes
+Graceful shutdown:
+    - stop_event set -> all processes observe it
+    - Consumers finish the current message and commit the offset
+    - Producer flush() all pending messages
+    - Wait for all processes to finish
 """
 
 import datetime
@@ -45,17 +45,17 @@ from kafka_consumer import run_consumer
 from LoggerSQLExporter import LoggerSQLExporter
 
 # ---------------------------------------------------------------------------
-# Format de log centralise (identique a logger.py)
+# Centralized log format (identical to logger.py)
 # ---------------------------------------------------------------------------
 LOG_FORMAT = "%(asctime)s | %(processName)s(%(process)d) | %(levelname)s | %(name)s | %(message)s"
 
 
 # ---------------------------------------------------------------------------
-# Helpers logging
+# Logging helpers
 # ---------------------------------------------------------------------------
 
 def start_log_listener(log_queue: multiprocessing.Queue, log_file: str) -> logging.handlers.QueueListener:
-    """Demarre le listener de log centralise (dans le process principal)."""
+    """Starts the centralized log listener (in the main process)."""
     fmt = logging.Formatter(LOG_FORMAT)
     fh = logging.FileHandler(log_file, encoding="utf-8")
     fh.setLevel(logging.DEBUG)
@@ -67,7 +67,7 @@ def start_log_listener(log_queue: multiprocessing.Queue, log_file: str) -> loggi
 
 
 def configure_main_logger(log_queue: multiprocessing.Queue) -> None:
-    """Configure le logger du process principal (main)."""
+    """Configures the logger for the main process."""
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
     root.handlers.clear()
@@ -78,44 +78,44 @@ def configure_main_logger(log_queue: multiprocessing.Queue) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Verification de la connexion Kafka
+# Kafka connection check
 # ---------------------------------------------------------------------------
 
 def check_kafka_connection(bootstrap: str, timeout: float = 10.0) -> bool:
     """
-    Verifie que le broker Kafka est accessible en listant les topics.
+    Verifies that the Kafka broker is reachable by listing topics.
 
-    Parametres
+    Parameters
     ----------
-    bootstrap : str   -- ex: "localhost:9092"
-    timeout   : float -- secondes d'attente max
+    bootstrap : str   -- e.g. "localhost:9092"
+    timeout   : float -- max wait in seconds
 
-    Retourne True si le broker repond, False sinon.
+    Returns True if the broker responds, False otherwise.
     """
     try:
         admin = AdminClient({"bootstrap.servers": bootstrap})
         metadata = admin.list_topics(timeout=timeout)
         log = logging.getLogger("main")
         log.info(
-            "Kafka accessible | broker=%s | topics=%d",
+            "Kafka reachable | broker=%s | topics=%d",
             bootstrap, len(metadata.topics)
         )
         print(f"[main] Kafka OK -- broker={bootstrap} | {len(metadata.topics)} topic(s)")
         return True
     except KafkaException as exc:
-        print(f"[main] ERREUR : Kafka inaccessible sur {bootstrap} : {exc}")
-        print("[main] Verifiez que kafka_setup.bat a ete execute et que le broker tourne.")
+        print(f"[main] ERROR: Kafka unreachable at {bootstrap}: {exc}")
+        print("[main] Make sure kafka_setup.bat has been run and the broker is running.")
         return False
 
 
 # ---------------------------------------------------------------------------
-# Verification de la connexion SQL Server
+# SQL Server connection check
 # ---------------------------------------------------------------------------
 
 def check_sql_connection(db_name: str) -> bool:
     """
-    Verifie que SQL Server est accessible.
-    Retourne True si la connexion reussit, False sinon.
+    Verifies that SQL Server is reachable.
+    Returns True if connection succeeds, False otherwise.
     """
     conn_str = (
         f"DRIVER={{ODBC Driver 17 for SQL Server}};"
@@ -130,20 +130,20 @@ def check_sql_connection(db_name: str) -> bool:
         )
         with engine.connect():
             pass
-        print(f"[main] SQL Server OK -- base={db_name}")
+        print(f"[main] SQL Server OK -- database={db_name}")
         return True
     except Exception as exc:
-        print(f"[main] ERREUR : SQL Server inaccessible (base={db_name}) : {exc}")
-        print("[main] Verifiez que SQL Server Express tourne et que la base existe.")
+        print(f"[main] ERROR: SQL Server unreachable (database={db_name}): {exc}")
+        print("[main] Make sure SQL Server Express is running and the database exists.")
         return False
 
 
 # ---------------------------------------------------------------------------
-# Resolution du nom du fichier logger (meme logique que logger.py)
+# Logger file name resolution (same logic as logger.py)
 # ---------------------------------------------------------------------------
 
 def _sql_conn_context(database_name: str):
-    """Retourne une connexion SQLAlchemy a SQL Server (Windows Auth)."""
+    """Returns a SQLAlchemy connection to SQL Server (Windows Auth)."""
     conn_str = (
         f"DRIVER={{ODBC Driver 17 for SQL Server}};"
         f"SERVER=localhost\\SQLEXPRESS;"
@@ -158,16 +158,16 @@ def _sql_conn_context(database_name: str):
 
 def resolve_logger_file(db_name: str, logger_raw: str) -> str:
     """
-    Resout le nom du fichier logger en interrogeant dbo.Loggers.
-    Identique a check_loggerfile_name() dans logger.py, mais sans input() interactif :
-    accepte automatiquement la suggestion (comportement daemon).
+    Resolves the logger file name by querying dbo.Loggers.
+    Identical to check_loggerfile_name() in logger.py, but without interactive input():
+    automatically accepts the suggestion (daemon behaviour).
 
-    Retourne le nom de fichier final (ex: "exp_14_4_3.lzma").
+    Returns the final file name (e.g. "exp_14_4_3.lzma").
     """
     old_logger = logger_raw
     logger = logger_raw.removesuffix(".lzma")
 
-    # Normalise le nom selon le type (exp_, check_, integration_)
+    # Normalize name according to type (exp_, check_, integration_)
     logger_types = ("exp", "check", "integration")
     for logger_type in logger_types:
         if logger.lower().startswith(logger_type):
@@ -184,7 +184,7 @@ def resolve_logger_file(db_name: str, logger_raw: str) -> str:
             )
             exists_df = pd.read_sql_query(query, conn)
     except Exception as exc:
-        print(f"[main] Avertissement : impossible de lire Loggers ({exc}). Utilisation de '{logger}_1.lzma'")
+        print(f"[main] Warning: unable to read Loggers ({exc}). Using '{logger}_1.lzma'")
         return f"{logger}_1.lzma"
 
     if len(exists_df) != 0:
@@ -197,7 +197,7 @@ def resolve_logger_file(db_name: str, logger_raw: str) -> str:
             logger = last[:num_i] + str(int(nums[-1]) + 1)
 
         if old_logger.removesuffix(".lzma") != logger:
-            print(f"[main] Nom logger auto-renomme : {old_logger} -> {logger}.lzma")
+            print(f"[main] Logger name auto-renamed: {old_logger} -> {logger}.lzma")
     else:
         if not logger.endswith("_1") and not (
             datetime.datetime.now().month == 1 and logger.endswith("_1_1")
@@ -206,22 +206,22 @@ def resolve_logger_file(db_name: str, logger_raw: str) -> str:
 
     final_name = logger + ".lzma"
 
-    # Mise a jour du DataExporterConfig.json (comme logger.py)
+    # Update DataExporterConfig.json (same as logger.py)
     try:
         raw_cfg = cfg.get_raw_config()
         raw_cfg["logger_file"] = final_name
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "DataExporterConfig.json")
         with open(config_path, "w", encoding="utf-8") as fh:
             json.dump(raw_cfg, fh, indent=4)
-        print(f"[main] Logger name : {final_name}")
+        print(f"[main] Logger name: {final_name}")
     except Exception as exc:
-        print(f"[main] Avertissement : impossible de mettre a jour DataExporterConfig.json : {exc}")
+        print(f"[main] Warning: unable to update DataExporterConfig.json: {exc}")
 
     return final_name
 
 
 # ---------------------------------------------------------------------------
-# Insertion de la ligne de demarrage dans dbo.Loggers
+# Startup row insertion into dbo.Loggers
 # ---------------------------------------------------------------------------
 
 def register_logger_in_db(
@@ -230,8 +230,8 @@ def register_logger_in_db(
     stop_writing_event: multiprocessing.Event,
 ) -> None:
     """
-    Insere la ligne de demarrage dans dbo.Loggers.
-    Identique a ce que fait logger.py avec lse.export("Loggers", ...).
+    Inserts the startup row into dbo.Loggers.
+    Identical to what logger.py does with lse.export("Loggers", ...).
     """
     start_logger_data = {
         "LoggerFile": logger_file,
@@ -250,80 +250,80 @@ def register_logger_in_db(
         cfg.NEW_DB,
     )
     lse.export("Loggers", start_logger_data)
-    print(f"[main] Ligne Loggers inseree pour '{logger_file}'")
+    print(f"[main] Loggers row inserted for '{logger_file}'")
 
 
 # ---------------------------------------------------------------------------
-# Point d'entree principal
+# Main entry point
 # ---------------------------------------------------------------------------
 
 def main() -> None:
     """
-    Orchestre le demarrage complet du pipeline Kafka.
+    Orchestrates the full Kafka pipeline startup.
     """
     multiprocessing.freeze_support()
 
     # ----------------------------------------------------------------
-    # 1. Logging centralise
+    # 1. Centralized logging
     # ----------------------------------------------------------------
     log_queue: multiprocessing.Queue = multiprocessing.Queue(maxsize=50_000)
     listener = start_log_listener(log_queue, "dis-kafka.log")
     configure_main_logger(log_queue)
     log = logging.getLogger("main")
 
-    log.info("kafka_main demarre -- PID %d", os.getpid())
+    log.info("kafka_main started -- PID %d", os.getpid())
     print(f"[main] kafka_main PID={os.getpid()}")
 
     # ----------------------------------------------------------------
-    # 2. Verification des prerequis
+    # 2. Prerequisites check
     # ----------------------------------------------------------------
-    print("\n[main] === Verification des prerequis ===")
+    print("\n[main] === Checking prerequisites ===")
 
     if not check_kafka_connection(cfg.KAFKA_BOOTSTRAP):
-        log.critical("Kafka inaccessible -- arret")
+        log.critical("Kafka unreachable -- aborting")
         sys.exit(1)
 
     if not check_sql_connection(cfg.DB_NAME):
-        log.critical("SQL Server inaccessible -- arret")
+        log.critical("SQL Server unreachable -- aborting")
         sys.exit(1)
 
-    print("[main] Prerequis OK\n")
+    print("[main] Prerequisites OK\n")
 
     # ----------------------------------------------------------------
-    # 3. Resolution du nom du fichier logger
+    # 3. Logger file name resolution
     # ----------------------------------------------------------------
     try:
         logger_file = resolve_logger_file(cfg.DB_NAME, cfg.LOGGER_FILE)
     except Exception as exc:
-        log.critical("Impossible de resoudre le nom du logger : %s", exc)
-        print(f"[main] ERREUR resolution logger : {exc}")
+        log.critical("Unable to resolve logger name: %s", exc)
+        print(f"[main] ERROR resolving logger: {exc}")
         sys.exit(1)
 
-    log.info("Fichier logger : %s", logger_file)
+    log.info("Logger file: %s", logger_file)
 
     # ----------------------------------------------------------------
-    # 4. Timestamp de demarrage
+    # 4. Start timestamp
     # ----------------------------------------------------------------
     start_time: float = datetime.datetime.now().timestamp()
 
     # ----------------------------------------------------------------
-    # 5. Insertion dans dbo.Loggers
+    # 5. Insert into dbo.Loggers
     # ----------------------------------------------------------------
     stop_writing_event_main = multiprocessing.Event()
     try:
         register_logger_in_db(logger_file, start_time, stop_writing_event_main)
     except Exception as exc:
-        log.error("Erreur insertion Loggers : %s", exc)
-        print(f"[main] Avertissement : impossible d'inserer dans Loggers : {exc}")
-        # Non fatal -- on continue
+        log.error("Error inserting into Loggers: %s", exc)
+        print(f"[main] Warning: unable to insert into Loggers: {exc}")
+        # Non-fatal -- continue
 
     # ----------------------------------------------------------------
-    # 6. Event de shutdown partage entre tous les processes
+    # 6. Shared shutdown event for all processes
     # ----------------------------------------------------------------
     stop_event = multiprocessing.Event()
 
     # ----------------------------------------------------------------
-    # 7. Lancement du Producer (1 process)
+    # 7. Start Producer (1 process)
     # ----------------------------------------------------------------
     producer_process = multiprocessing.Process(
         target=run_producer,
@@ -333,7 +333,7 @@ def main() -> None:
     )
 
     # ----------------------------------------------------------------
-    # 8. Lancement des Consumers (N processes)
+    # 8. Start Consumers (N processes)
     # ----------------------------------------------------------------
     consumer_processes = []
     for i in range(cfg.KAFKA_NUM_CONSUMERS):
@@ -346,34 +346,34 @@ def main() -> None:
         consumer_processes.append(p)
 
     # ----------------------------------------------------------------
-    # 9. Demarrage
+    # 9. Start all processes
     # ----------------------------------------------------------------
-    print(f"\n[main] Demarrage : 1 producer + {cfg.KAFKA_NUM_CONSUMERS} consumers")
-    print(f"[main] Topic : {cfg.KAFKA_TOPIC} | Bootstrap : {cfg.KAFKA_BOOTSTRAP}")
-    print(f"[main] Logger file : {logger_file}")
-    print("[main] Ctrl+C pour arreter proprement\n")
+    print(f"\n[main] Starting: 1 producer + {cfg.KAFKA_NUM_CONSUMERS} consumers")
+    print(f"[main] Topic: {cfg.KAFKA_TOPIC} | Bootstrap: {cfg.KAFKA_BOOTSTRAP}")
+    print(f"[main] Logger file: {logger_file}")
+    print("[main] Press Ctrl+C to stop gracefully\n")
 
     producer_process.start()
-    log.info("Producer demarre -- PID %d", producer_process.pid)
+    log.info("Producer started -- PID %d", producer_process.pid)
 
     for p in consumer_processes:
         p.start()
-        log.info("Consumer demarre -- PID %d | name=%s", p.pid, p.name)
+        log.info("Consumer started -- PID %d | name=%s", p.pid, p.name)
 
     # ----------------------------------------------------------------
-    # 10. Boucle principale -- stats toutes les 5 secondes
+    # 10. Main loop -- stats every 5 seconds
     # ----------------------------------------------------------------
     try:
         while True:
             time.sleep(5.0)
 
-            # Verification que les processes tournent encore
+            # Check that processes are still running
             alive_producer = producer_process.is_alive()
             alive_consumers = [p.is_alive() for p in consumer_processes]
 
             if not alive_producer:
-                log.error("Le process Producer s'est arrete de maniere inattendue -- redemarrage")
-                print("[main] AVERTISSEMENT : Producer arrete -- redemarrage...")
+                log.error("Producer process stopped unexpectedly -- restarting")
+                print("[main] WARNING: Producer stopped -- restarting...")
                 producer_process = multiprocessing.Process(
                     target=run_producer,
                     args=(stop_event, log_queue, start_time),
@@ -384,8 +384,8 @@ def main() -> None:
 
             for i, (p, alive) in enumerate(zip(consumer_processes, alive_consumers)):
                 if not alive:
-                    log.error("Consumer %d s'est arrete de maniere inattendue -- redemarrage", i)
-                    print(f"[main] AVERTISSEMENT : Consumer-{i} arrete -- redemarrage...")
+                    log.error("Consumer %d stopped unexpectedly -- restarting", i)
+                    print(f"[main] WARNING: Consumer-{i} stopped -- restarting...")
                     new_p = multiprocessing.Process(
                         target=run_consumer,
                         args=(i, stop_event, log_queue, logger_file, start_time),
@@ -395,49 +395,49 @@ def main() -> None:
                     consumer_processes[i] = new_p
                     new_p.start()
 
-            # Affichage du statut
+            # Print status
             n_alive = sum(alive_consumers)
             print(
-                f"[main] statut : producer={'OK' if alive_producer else 'KO'} | "
-                f"consumers={n_alive}/{cfg.KAFKA_NUM_CONSUMERS} actifs | "
+                f"[main] status: producer={'OK' if alive_producer else 'KO'} | "
+                f"consumers={n_alive}/{cfg.KAFKA_NUM_CONSUMERS} active | "
                 f"logger={logger_file}"
             )
 
     except KeyboardInterrupt:
-        print("\n[main] Ctrl+C recu -- shutdown propre en cours...")
-        log.info("Shutdown declenche par KeyboardInterrupt")
+        print("\n[main] Ctrl+C received -- graceful shutdown in progress...")
+        log.info("Shutdown triggered by KeyboardInterrupt")
 
     # ----------------------------------------------------------------
     # 11. Graceful shutdown
     # ----------------------------------------------------------------
-    print("[main] Signalement d'arret aux consumers et au producer...")
+    print("[main] Signaling stop to consumers and producer...")
     stop_event.set()
 
-    # Attendre que les consumers finissent leurs commits en cours
-    print("[main] Attente des consumers (max 30s)...")
+    # Wait for consumers to finish their in-progress commits
+    print("[main] Waiting for consumers (max 30s)...")
     for p in consumer_processes:
         p.join(timeout=30)
         if p.is_alive():
-            log.warning("Consumer %s ne s'est pas arrete dans les 30s -- terminate()", p.name)
+            log.warning("Consumer %s did not stop within 30s -- terminate()", p.name)
             p.terminate()
             p.join(timeout=5)
 
-    # Attendre que le producer flush ses messages
-    print("[main] Attente du producer (max 30s)...")
+    # Wait for producer to flush its messages
+    print("[main] Waiting for producer (max 30s)...")
     producer_process.join(timeout=30)
     if producer_process.is_alive():
-        log.warning("Producer ne s'est pas arrete dans les 30s -- terminate()")
+        log.warning("Producer did not stop within 30s -- terminate()")
         producer_process.terminate()
         producer_process.join(timeout=5)
 
-    # Arret du listener de log
+    # Stop the log listener
     while not log_queue.empty():
         time.sleep(0.1)
     listener.stop()
 
-    print("\n[main] === Pipeline arrete proprement ===")
-    print(f"[main] Logger file : {logger_file}")
-    print("[main] Verifiez dis-kafka.log pour les details")
+    print("\n[main] === Pipeline stopped gracefully ===")
+    print(f"[main] Logger file: {logger_file}")
+    print("[main] Check dis-kafka.log for details")
 
 
 # ---------------------------------------------------------------------------

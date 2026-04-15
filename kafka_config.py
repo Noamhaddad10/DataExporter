@@ -1,13 +1,13 @@
 """
 kafka_config.py
 ===============
-Configuration Kafka centralisee pour le pipeline DIS -> Kafka -> SQL.
+Centralized Kafka configuration for the DIS -> Kafka -> SQL pipeline.
 
-Ce module charge DataExporterConfig.json et expose toutes les constantes
-necessaires au producer, aux consumers et au main orchestrateur.
+This module loads DataExporterConfig.json and exposes all constants
+needed by the producer, consumers, and main orchestrator.
 
-Regle : tout le reste du code importe depuis ici. On ne duplique jamais
-une constante de config dans un autre fichier.
+Rule: all other code imports from here. Constants are never duplicated
+in any other file.
 """
 
 import json
@@ -18,28 +18,28 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Chargement de DataExporterConfig.json
+# Load DataExporterConfig.json
 # ---------------------------------------------------------------------------
 _CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "DataExporterConfig.json")
 
 def _load_config() -> dict:
-    """Charge et retourne le contenu de DataExporterConfig.json."""
+    """Loads and returns the contents of DataExporterConfig.json."""
     try:
         with open(_CONFIG_PATH, "r", encoding="utf-8") as fh:
             return json.load(fh)
     except FileNotFoundError:
         raise FileNotFoundError(
-            f"Fichier de configuration introuvable : {_CONFIG_PATH}\n"
-            "Verifiez que DataExporterConfig.json est dans le repertoire du projet."
+            f"Configuration file not found: {_CONFIG_PATH}\n"
+            "Make sure DataExporterConfig.json is in the project directory."
         )
     except json.JSONDecodeError as exc:
-        raise ValueError(f"DataExporterConfig.json invalide : {exc}") from exc
+        raise ValueError(f"Invalid DataExporterConfig.json: {exc}") from exc
 
-# Chargement une seule fois a l'import du module
+# Loaded once at module import
 _RAW: dict = _load_config()
 
 # ---------------------------------------------------------------------------
-# Parametres SQL / DIS herites de la config existante
+# SQL / DIS parameters inherited from existing config
 # ---------------------------------------------------------------------------
 EXERCISE_ID: int        = _RAW["exercise_id"]
 DB_NAME: str            = _RAW["database_name"]
@@ -53,123 +53,123 @@ ENTITY_LOCS_PER_SEC: int= _RAW["entity_locations_per_second"]
 TRACKED_TABLES: list    = _RAW["tracked_tables"].replace(" ", "").split(",")
 SCENARIO: Any           = _RAW.get("Scenario", None)
 
-# Types de PDU acceptes (3eme byte du paquet DIS = pduType)
+# Accepted PDU types (3rd byte of DIS packet = pduType)
 PDU_TYPE_LIST: list[int] = [1, 2, 3, 21, 33]
 
 # ---------------------------------------------------------------------------
-# Parametres Kafka (section "kafka" de DataExporterConfig.json)
+# Kafka parameters (section "kafka" of DataExporterConfig.json)
 # ---------------------------------------------------------------------------
 _KAFKA_CFG: dict = _RAW.get("kafka", {})
 
 # Broker bootstrap
 KAFKA_BOOTSTRAP: str    = _KAFKA_CFG.get("bootstrap_servers", "localhost:9092")
 
-# Topic unique pour tous les PDU bruts
+# Single topic for all raw PDUs
 KAFKA_TOPIC: str        = _KAFKA_CFG.get("topic", "dis.raw")
 
-# Nombre de partitions du topic (= nombre de consumers en parallele)
+# Number of topic partitions (= number of parallel consumers)
 KAFKA_NUM_PARTITIONS: int = _KAFKA_CFG.get("num_partitions", 4)
 
-# Consumer group ID (utilise par tous les consumers du pipeline)
+# Consumer group ID (shared by all pipeline consumers)
 KAFKA_GROUP_ID: str     = _KAFKA_CFG.get("group_id", "dis-export-group")
 
-# Nombre de consumers a instancier dans kafka_main.py
+# Number of consumers to instantiate in kafka_main.py
 KAFKA_NUM_CONSUMERS: int = _KAFKA_CFG.get("num_consumers", 4)
 
 # ---------------------------------------------------------------------------
-# Configuration Producer confluent_kafka
+# confluent_kafka Producer configuration
 # ---------------------------------------------------------------------------
 _PROD_CFG: dict = _KAFKA_CFG.get("producer", {})
 
 KAFKA_PRODUCER_CONFIG: dict = {
-    # Adresse du broker
+    # Broker address
     "bootstrap.servers": KAFKA_BOOTSTRAP,
 
-    # Attendre X ms avant d'envoyer un batch -> reduit les appels reseau
-    # a 5ms on regroupe les PDU arrivant dans la meme fenetre
+    # Wait X ms before sending a batch -> reduces network calls
+    # at 5ms we group PDUs arriving in the same window
     "linger.ms": _PROD_CFG.get("linger_ms", 5),
 
-    # Taille maximale d'un batch avant envoi force (64 KB)
+    # Maximum batch size before forced send (64 KB)
     "batch.size": _PROD_CFG.get("batch_size", 65536),
 
-    # Compression lz4 : meilleur ratio vitesse/taux pour les petits messages (~100-200 bytes)
+    # lz4 compression: best speed/ratio for small messages (~100-200 bytes)
     "compression.type": _PROD_CFG.get("compression_type", "lz4"),
 
-    # acks=all : le broker confirme l'ecriture sur toutes les repliques -> zero perte
+    # acks=all: broker confirms write on all replicas -> zero data loss
     "acks": _PROD_CFG.get("acks", "all"),
 
-    # Buffer interne du producer (nombre de messages en attente d'envoi)
+    # Internal producer buffer (number of messages awaiting delivery)
     "queue.buffering.max.messages": 500_000,
 
-    # Buffer interne en kilo-octets (1 GB)
+    # Internal buffer in kilobytes (1 GB)
     "queue.buffering.max.kbytes": 1_048_576,
 
-    # Timeout de livraison : si le message n'est pas ACKe en 30s -> erreur
+    # Delivery timeout: if message is not ACKed within 30s -> error
     "delivery.timeout.ms": 30_000,
 
-    # Retry automatique en cas d'erreur transitoire
+    # Automatic retry on transient errors
     "retries": 5,
 }
 
 # ---------------------------------------------------------------------------
-# Configuration Consumer confluent_kafka
+# confluent_kafka Consumer configuration
 # ---------------------------------------------------------------------------
 _CONS_CFG: dict = _KAFKA_CFG.get("consumer", {})
 
 KAFKA_CONSUMER_CONFIG: dict = {
-    # Adresse du broker
+    # Broker address
     "bootstrap.servers": KAFKA_BOOTSTRAP,
 
-    # Groupe de consommateurs : Kafka repartit les partitions entre les membres du groupe
+    # Consumer group: Kafka distributes partitions among group members
     "group.id": KAFKA_GROUP_ID,
 
-    # Si un consumer rejoint pour la premiere fois (pas d'offset sauvegarde),
-    # partir du debut du topic pour ne manquer aucun message
+    # If a consumer joins for the first time (no saved offset),
+    # start from the beginning of the topic to not miss any message
     "auto.offset.reset": _CONS_CFG.get("auto_offset_reset", "earliest"),
 
-    # CRITIQUE : auto-commit desactive -> on commite manuellement APRES l'insert SQL
-    # Garantie : si SQL echoue, l'offset n'est pas avance -> re-traitement au redemarrage
+    # CRITICAL: auto-commit disabled -> we commit manually AFTER the SQL insert
+    # Guarantee: if SQL fails, offset is not advanced -> reprocessed on restart
     "enable.auto.commit": False,
 
-    # Attendre au minimum 1 KB de donnees avant de declencher un fetch
+    # Minimum data to fetch before triggering a fetch request (1 KB)
     "fetch.min.bytes": _CONS_CFG.get("fetch_min_bytes", 1024),
 
-    # Attendre au maximum 100ms si fetch.min.bytes n'est pas atteint
+    # Maximum wait if fetch.min.bytes is not reached (100ms)
     "fetch.wait.max.ms": _CONS_CFG.get("fetch_wait_max_ms", 100),
 
-    # Temps max entre deux poll() avant que Kafka considere le consumer mort
-    # (300 secondes = 5 minutes, pour absorber les longs inserts SQL batch)
+    # Max time between two poll() calls before Kafka considers the consumer dead
+    # (300 seconds = 5 minutes, to absorb long SQL batch inserts)
     "max.poll.interval.ms": _CONS_CFG.get("max_poll_interval_ms", 300_000),
 
-    # Timeout heartbeat avec le broker
+    # Heartbeat timeout with the broker
     "session.timeout.ms": _CONS_CFG.get("session_timeout_ms", 30_000),
 }
 
 # ---------------------------------------------------------------------------
-# Format du message Kafka (documentation inline)
+# Kafka message format (inline documentation)
 # ---------------------------------------------------------------------------
-# Structure d'un message Kafka (value) :
+# Structure of a Kafka message (value):
 #
 #   ┌─────────────────────────┬──────────────────────────┐
 #   │  packet_time  (8 bytes) │  pdu_raw_data  (N bytes) │
-#   │  struct.pack("!d", t)   │  bytes bruts UDP recus   │
+#   │  struct.pack("!d", t)   │  raw UDP bytes received  │
 #   └─────────────────────────┴──────────────────────────┘
 #
-# Reconversion pour LoggerPDU (format attendu par LoggerPduProcessor) :
+# Conversion back for LoggerPDU (format expected by LoggerPduProcessor):
 #   logger_line = pdu_raw_data + b"line_divider" + struct.pack("d", packet_time)
-#                                                  ↑ native endian ("d"), PAS "!d"
+#                                                  ↑ native endian ("d"), NOT "!d"
 #
-KAFKA_MSG_HEADER_SIZE: int = 8   # bytes reserves au packet_time dans chaque message
+KAFKA_MSG_HEADER_SIZE: int = 8   # bytes reserved for packet_time in each message
 KAFKA_LINE_DIVIDER: bytes  = b"line_divider"
 
 
 def get_raw_config() -> dict:
-    """Retourne le dictionnaire brut charge depuis DataExporterConfig.json."""
+    """Returns the raw dictionary loaded from DataExporterConfig.json."""
     return _RAW
 
 
 def reload() -> None:
-    """Recharge la configuration depuis le disque (utile en test)."""
+    """Reloads configuration from disk (useful in tests)."""
     global _RAW
     _RAW = _load_config()
-    log.info("Configuration rechargee depuis %s", _CONFIG_PATH)
+    log.info("Configuration reloaded from %s", _CONFIG_PATH)
