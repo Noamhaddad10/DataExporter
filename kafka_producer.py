@@ -24,7 +24,6 @@ import socket
 import struct
 import time
 from multiprocessing import Queue, Event
-from typing import Optional
 
 from confluent_kafka import Producer, KafkaException
 

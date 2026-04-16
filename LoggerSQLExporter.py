@@ -9,14 +9,8 @@ import logging
 import threading
 import time
 import urllib.parse
-import traceback
-
 import sqlalchemy
-from sqlalchemy.exc import OperationalError, IntegrityError, SQLAlchemyError
 
-count = 0
-count_export = 0
-count_insert = 0
 log = logging.getLogger("LoggerSQLExporter")
 
 
@@ -48,13 +42,17 @@ class Exporter:
     """
 
     def __init__(self, stop_event: multiprocessing.Event, table_name: str, sql_meta: sqlalchemy.MetaData,
-                 sql_engine: sqlalchemy.engine, tracked_tables: list, start_time, export_delay, export_size, data=[]):
+                 sql_engine: sqlalchemy.engine, tracked_tables: list, start_time, export_delay, export_size, data=None):
         """
         :param table_name: str : The name of the target table
         :param sql_meta: sqlalchemy.MetaData
         :param sql_engine: sqlalchemy.engine
         """
+        data = data if data is not None else []
         self.table_name = table_name
+        self.count = 0
+        self.count_export = 0
+        self.count_insert = 0
         self.table = sqlalchemy.Table(table_name, sql_meta, autoload_with=sql_engine)
         self.sql_engine = sql_engine
         self.tracked_tables = tracked_tables
@@ -82,8 +80,6 @@ class Exporter:
             self.data += data_to_add
 
     def export(self):
-        global count
-        global count_export
         """
         Exports data to the target table.
         This is targeted by a thread, and should not really be called by you
@@ -94,26 +90,26 @@ class Exporter:
             self.data = []
         if len(data) == 0:
             if self.table_name in self.tracked_tables:
-                print(f"No data in {self.table_name}")
+                log.debug("No data in %s", self.table_name)
             if not self.stop_event.is_set():
                 # Only keep exporting data while the main thread is still alive
                 # If the main thread has finished, then no more data will reach here, and so this thread can end
                 threading.Timer(1, self.export).start()
         elif self.table_name == "EntityLocations":
-            if len(data) < self.export_size and count > 0:
-                count += 1
+            if len(data) < self.export_size and self.count > 0:
+                self.count += 1
                 with self.lock:
                     self.data.extend(data)
                 threading.Timer(self.export_delay, self.export).start()
                 time.sleep(0.05)
                 return
             else:
-                count = 0
+                self.count = 0
                 ExportTime = datetime.datetime.now()
                 for i in range(len(data)):
                     data[i]["ExportTimeToDb"] = ExportTime.timestamp() - self.start_time
-                count_export = count_export + len(data)
-                print("count_export: ", count_export)
+                self.count_export = self.count_export + len(data)
+                log.debug("count_export: %d", self.count_export)
                 self.insert(data)
                 threading.Thread(target=self.export, args=()).start()
         else:
@@ -127,7 +123,6 @@ class Exporter:
             threading.Thread(target=self.export, args=()).start()
 
     def insert(self, data):
-        global count_insert
         # FIX BUG3: correct MAX_TRIES logic -- no infinite loop, no manual rollback,
         # no print(range(10000)) loops.
         MAX_TRIES = 5
@@ -138,12 +133,12 @@ class Exporter:
                 with self.sql_engine.begin() as connection:
                     if self.table_name in self.tracked_tables:
                         start = datetime.datetime.now()
-                        print(f"Exporting: {self.table_name}, start={start}, size={len(data)}, pid={os.getpid()}")
+                        log.debug("Exporting: %s, start=%s, size=%d, pid=%d", self.table_name, start, len(data), os.getpid())
                     if self.table_name == "EntityLocations":
-                        count_insert = count_insert + len(data)
+                        self.count_insert = self.count_insert + len(data)
                     connection.execute(self.table.insert(), data)
                     if self.table_name in self.tracked_tables:
-                        print(f"Done: {self.table_name}, pid={os.getpid()}, time={datetime.datetime.now() - start}")
+                        log.debug("Done: %s, pid=%d, time=%s", self.table_name, os.getpid(), datetime.datetime.now() - start)
                     return  # success -- exit the loop
 
             except Exception as e:
@@ -158,12 +153,12 @@ class Exporter:
                         attempt, MAX_TRIES, self.table_name
                     )
                     if attempt >= MAX_TRIES:
-                        log.error("WE LOST A MESSAGE -- max retries exceeded for table=%s", self.table_name)
+                        log.error("WE LOST A MESSAGE -- max retries exceeded for table=%s", self.table_name, exc_info=True)
                         return
                     time.sleep(0.05)
                 else:
                     # Non-retryable error: log and give up
-                    log.error("Insert error table=%s: %s", self.table_name, e)
+                    log.error("Insert error table=%s: %s", self.table_name, e, exc_info=True)
                     return
 
 
@@ -258,7 +253,7 @@ class LoggerSQLExporter:
                 )
                 return True
             except Exception as exc:
-                log.error("insert_sync Loggers failed: %s", exc)
+                log.error("insert_sync Loggers failed: %s", exc, exc_info=True)
                 return False
 
         if table not in self.exporters:
@@ -275,7 +270,7 @@ class LoggerSQLExporter:
             self.exporters[table].insert(rows)
             return True
         except Exception as exc:
-            log.error("insert_sync table=%s failed: %s", table, exc)
+            log.error("insert_sync table=%s failed: %s", table, exc, exc_info=True)
             return False
 
 

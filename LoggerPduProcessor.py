@@ -5,14 +5,13 @@ import logging
 import json
 import multiprocessing
 import struct
-import copy
 import math
 import time
 import opendis
 from opendis import dis7
 from opendis.PduFactory import createPdu
-count_parsing = 0
 nans = ["GeoLocationX", "GeoLocationY", "GeoLocationZ", "GeoVelocityX", "GeoVelocityY", "GeoVelocityZ"]
+log = logging.getLogger("LoggerPduProcessor")
 
 
 class LoggerPDU:
@@ -132,7 +131,7 @@ class EventReportInterpreter:
                         self.fixed_data[data_name] = fixed_data.fixedDatumValue
             except Exception as e:
                 self.fixed_data[data_name] = None
-                print(f'error dealing with float64 {self.event_name} ,{data_name}')
+                log.error("error dealing with float64 %s, %s", self.event_name, data_name, exc_info=True)
         self._get_base_data()
 
     def _get_base_data(self):
@@ -182,6 +181,7 @@ class LoggerPduProcessor:
         self.play_stop_situation_dict = {-1: "pre", 0: "play", 1: "stop"}
         #self.read_encoder()
         self.start_time = start_time
+        self.count_parsing = 0
 
     def replace_nans(self, d: dict):
         for key in d.keys():
@@ -293,7 +293,6 @@ class LoggerPduProcessor:
             self._entities(logger_pdu, base_data)
 
     def _entity_locs(self, logger_pdu: LoggerPDU, base_data: dict):
-        global count_parsing
         """
         Creates the data for the EntityLocations table
         :param logger_pdu: LoggerPDU
@@ -321,7 +320,7 @@ class LoggerPduProcessor:
             if seconds_partition > self.entity_locs_cache[e_id]:
                 self.entity_locs_cache[e_id] = seconds_partition
                 self.queue.put(("EntityLocations", [entity_locs]))
-                count_parsing += 1
+                self.count_parsing += 1
         else:
             self.entity_locs_cache[e_id] = seconds_partition
             self.queue.put(("EntityLocations", [entity_locs]))
