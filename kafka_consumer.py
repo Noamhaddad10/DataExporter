@@ -28,9 +28,7 @@ import multiprocessing
 import os
 import struct
 import time
-import traceback
 from multiprocessing import Queue, Event
-from typing import Optional
 
 from confluent_kafka import Consumer, KafkaError, KafkaException
 
@@ -166,7 +164,7 @@ def run_consumer(
             except struct.error as exc:
                 log.error(
                     "Consumer %d | Deserialization error at offset=%d: %s",
-                    consumer_id, msg.offset(), exc
+                    consumer_id, msg.offset(), exc, exc_info=True
                 )
                 count_errors += 1
                 _safe_commit(consumer, consumer_id)
@@ -204,7 +202,7 @@ def run_consumer(
             except Exception as exc:
                 log.error(
                     "Consumer %d | Error creating LoggerPDU at offset=%d: %s",
-                    consumer_id, msg.offset(), exc
+                    consumer_id, msg.offset(), exc, exc_info=True
                 )
                 count_errors += 1
                 _safe_commit(consumer, consumer_id)
@@ -232,8 +230,8 @@ def run_consumer(
                 lpp.process(received_pdu)
             except Exception as exc:
                 log.error(
-                    "Consumer %d | Error in lpp.process() at offset=%d: %s\n%s",
-                    consumer_id, msg.offset(), exc, traceback.format_exc()
+                    "Consumer %d | Error in lpp.process() at offset=%d: %s",
+                    consumer_id, msg.offset(), exc, exc_info=True
                 )
                 count_errors += 1
                 _safe_commit(consumer, consumer_id)
@@ -401,8 +399,8 @@ def _drain_and_export(
                 all_ok = False
         except Exception as exc:
             log.error(
-                "Consumer %d | SQL export error at offset=%d: %s\n%s",
-                consumer_id, offset, exc, traceback.format_exc()
+                "Consumer %d | SQL export error at offset=%d: %s",
+                consumer_id, offset, exc, exc_info=True
             )
             all_ok = False
 
