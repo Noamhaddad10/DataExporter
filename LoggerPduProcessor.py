@@ -131,7 +131,7 @@ class EventReportInterpreter:
                         self.fixed_data[data_name] = fixed_data.fixedDatumValue
             except Exception as e:
                 self.fixed_data[data_name] = None
-                log.error("error dealing with float64 %s, %s", self.event_name, data_name)
+                log.error("error dealing with float64 %s, %s", self.event_name, data_name, exc_info=True)
         self._get_base_data()
 
     def _get_base_data(self):
