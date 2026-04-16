@@ -10,6 +10,7 @@ import threading
 import time
 import urllib.parse
 import sqlalchemy
+import kafka_config as cfg
 
 log = logging.getLogger("LoggerSQLExporter")
 
@@ -17,7 +18,7 @@ log = logging.getLogger("LoggerSQLExporter")
 def sql_engine(db: str):
     conn_str = (
         "DRIVER={ODBC Driver 17 for SQL Server};"
-        "SERVER=localhost\\SQLEXPRESS;"
+        f"SERVER={cfg.SQL_SERVER};"
         f"DATABASE={db};"
         "Trusted_Connection=yes;"
     )
@@ -184,9 +185,10 @@ class LoggerSQLExporter:
         :param new_db: bool
         """
         if new_db:
-            # Creates the Event Report tables when it's a new db. Can be run every time, but unnecessary
-            create_json()
-            create_all_tables(export_db)
+            log.warning(
+                "new_db=True is no longer supported (create_json/create_all_tables removed). "
+                "Create tables manually via SQL scripts before starting the pipeline."
+            )
 
         self.pdu_encoder = None
 
