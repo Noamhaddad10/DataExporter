@@ -145,7 +145,7 @@ def run_producer(
                 continue
             except OSError as exc:
                 # Socket error (e.g. port already in use, interface down)
-                log.error("UDP socket error: %s", exc)
+                log.error("UDP socket error: %s", exc, exc_info=True)
                 count_errors += 1
                 continue
 
