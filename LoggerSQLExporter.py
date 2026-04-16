@@ -184,9 +184,10 @@ class LoggerSQLExporter:
         :param new_db: bool
         """
         if new_db:
-            # Creates the Event Report tables when it's a new db. Can be run every time, but unnecessary
-            create_json()
-            create_all_tables(export_db)
+            log.warning(
+                "new_db=True is no longer supported (create_json/create_all_tables removed). "
+                "Create tables manually via SQL scripts before starting the pipeline."
+            )
 
         self.pdu_encoder = None
 
