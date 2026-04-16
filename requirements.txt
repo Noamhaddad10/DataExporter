@@ -1,0 +1,5 @@
+confluent-kafka>=2.3.0
+sqlalchemy>=2.0.0
+pyodbc>=5.0.0
+pandas>=2.0.0
+opendis>=7.0.0
