@@ -117,7 +117,7 @@ def check_sql_connection(db_name: str) -> bool:
     """
     conn_str = (
         f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-        f"SERVER=localhost\\SQLEXPRESS;"
+        f"SERVER={cfg.SQL_SERVER};"
         f"DATABASE={db_name};"
         f"Trusted_Connection=yes;"
     )
@@ -148,7 +148,7 @@ def _sql_conn_context(database_name: str):
     """Returns a SQLAlchemy connection to SQL Server (Windows Auth)."""
     conn_str = (
         f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-        f"SERVER=localhost\\SQLEXPRESS;"
+        f"SERVER={cfg.SQL_SERVER};"
         f"DATABASE={database_name};"
         f"Trusted_Connection=yes;"
     )

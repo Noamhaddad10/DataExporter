@@ -52,6 +52,7 @@ EXPORT_SIZE: int        = _RAW["export_size"]
 ENTITY_LOCS_PER_SEC: int= _RAW["entity_locations_per_second"]
 TRACKED_TABLES: list    = _RAW["tracked_tables"].replace(" ", "").split(",")
 SCENARIO: Any           = _RAW.get("Scenario", None)
+SQL_SERVER: str         = _RAW.get("sql_server", r"localhost\SQLEXPRESS")
 
 # Accepted PDU types (3rd byte of DIS packet = pduType)
 PDU_TYPE_LIST: list[int] = [1, 2, 3, 21, 33]

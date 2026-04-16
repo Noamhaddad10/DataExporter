@@ -10,6 +10,7 @@ import threading
 import time
 import urllib.parse
 import sqlalchemy
+import kafka_config as cfg
 
 log = logging.getLogger("LoggerSQLExporter")
 
@@ -17,7 +18,7 @@ log = logging.getLogger("LoggerSQLExporter")
 def sql_engine(db: str):
     conn_str = (
         "DRIVER={ODBC Driver 17 for SQL Server};"
-        "SERVER=localhost\\SQLEXPRESS;"
+        f"SERVER={cfg.SQL_SERVER};"
         f"DATABASE={db};"
         "Trusted_Connection=yes;"
     )
