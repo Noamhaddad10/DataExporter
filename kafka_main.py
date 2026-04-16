@@ -31,11 +31,9 @@ import os
 import re
 import sys
 import time
-import traceback
 import urllib.parse
 
 import pandas as pd
-import pyodbc
 import sqlalchemy
 from confluent_kafka.admin import AdminClient, KafkaException
 
@@ -123,6 +121,7 @@ def check_sql_connection(db_name: str) -> bool:
         f"DATABASE={db_name};"
         f"Trusted_Connection=yes;"
     )
+    engine = None
     try:
         engine = sqlalchemy.create_engine(
             "mssql+pyodbc:///?odbc_connect=" + urllib.parse.quote_plus(conn_str),
@@ -136,6 +135,9 @@ def check_sql_connection(db_name: str) -> bool:
         print(f"[main] ERROR: SQL Server unreachable (database={db_name}): {exc}")
         print("[main] Make sure SQL Server Express is running and the database exists.")
         return False
+    finally:
+        if engine is not None:
+            engine.dispose()
 
 
 # ---------------------------------------------------------------------------
@@ -178,14 +180,16 @@ def resolve_logger_file(db_name: str, logger_raw: str) -> str:
     engine = _sql_conn_context(db_name)
     try:
         with engine.connect() as conn:
-            query = (
-                f"SELECT TOP 1 LoggerFile FROM Loggers "
-                f"WHERE LoggerFile LIKE '{logger}%' ORDER BY WorldTime DESC"
+            query = sqlalchemy.text(
+                "SELECT TOP 1 LoggerFile FROM Loggers "
+                "WHERE LoggerFile LIKE :pattern ORDER BY WorldTime DESC"
             )
-            exists_df = pd.read_sql_query(query, conn)
+            exists_df = pd.read_sql_query(query, conn, params={"pattern": f"{logger}%"})
     except Exception as exc:
         print(f"[main] Warning: unable to read Loggers ({exc}). Using '{logger}_1.lzma'")
         return f"{logger}_1.lzma"
+    finally:
+        engine.dispose()
 
     if len(exists_df) != 0:
         last = exists_df["LoggerFile"][0].removesuffix(".lzma")
@@ -313,7 +317,7 @@ def main() -> None:
     try:
         register_logger_in_db(logger_file, start_time, stop_writing_event_main)
     except Exception as exc:
-        log.error("Error inserting into Loggers: %s", exc)
+        log.error("Error inserting into Loggers: %s", exc, exc_info=True)
         print(f"[main] Warning: unable to insert into Loggers: {exc}")
         # Non-fatal -- continue
 
