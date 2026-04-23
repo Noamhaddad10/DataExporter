@@ -42,6 +42,8 @@ class Exporter:
     to another thread, then it doesn't affect the mainloop.
     """
 
+    MAX_ACCUMULATE = 10  # EntityLocations: max re-queue attempts before forced flush
+
     def __init__(self, stop_event: multiprocessing.Event, table_name: str, sql_meta: sqlalchemy.MetaData,
                  sql_engine: sqlalchemy.engine, tracked_tables: list, start_time, export_delay, export_size, data=None):
         """
@@ -97,12 +99,11 @@ class Exporter:
                 # If the main thread has finished, then no more data will reach here, and so this thread can end
                 threading.Timer(1, self.export).start()
         elif self.table_name == "EntityLocations":
-            if len(data) < self.export_size and self.count > 0:
+            if len(data) < self.export_size and self.count < self.MAX_ACCUMULATE:
                 self.count += 1
                 with self.lock:
                     self.data.extend(data)
                 threading.Timer(self.export_delay, self.export).start()
-                time.sleep(0.05)
                 return
             else:
                 self.count = 0
