@@ -147,6 +147,65 @@ grep -n "socket\|Connection\|open(" *.py 2>/dev/null
 ```
 Pour chaque ressource, vérifie qu'elle est libérée (`close()`, `with` statement, `finally`).
 
+### 3.5 Patterns runtime souvent ratés par l'audit statique
+
+**Contexte** : les audits précédents (v1-v3) ont raté deux bugs révélés uniquement par `/smoke-test` en avril 2026 :
+- Log spam `TimeoutError` idle (chaque seconde, pendant la période où aucun UDP n'arrive).
+- Partitioning Kafka déséquilibré : `partition = pdu_type % NUM_PARTITIONS` avec un pdu_type de petite cardinalité route tout vers une même partition.
+
+Ces patterns sont **détectables statiquement** si on les cherche exprès. Applique ces checks :
+
+#### 3.5.1 Mishandling de `TimeoutError` dans `except OSError`
+
+Depuis Python 3.10, `socket.timeout` est un alias de `TimeoutError` qui hérite d'`OSError`. Donc un `except OSError` capturant un timeout de `socket.recvfrom()` va logger une fausse erreur à chaque timeout.
+
+```bash
+# Dans chaque module qui fait recvfrom/recv/accept avec settimeout :
+grep -n -B 2 -A 5 "except OSError" kafka_producer.py kafka_consumer.py 2>/dev/null
+```
+
+Pour chaque occurrence, vérifie que **au-dessus du `except OSError`** il y a un `except socket.timeout:` ou `except TimeoutError:` qui `continue` silencieusement. Sinon, **signale comme 🔴 bug** : "le producer va logger ERROR à chaque tick stop_event (1 log/s en idle)".
+
+#### 3.5.2 Partitioning Kafka avec variable de petite cardinalité
+
+```bash
+# Recherche les attributions de partition basées sur % ou hash
+grep -n "partition *= *.*%\|partition *= *.*hash" kafka_producer.py 2>/dev/null
+```
+
+Si la variable utilisée pour le modulo a une cardinalité ≤ `NUM_PARTITIONS`, le partitioning est déséquilibré — certains consumers ne recevront jamais rien.
+
+Liste :
+- `cfg.PDU_TYPE_LIST` → combien de valeurs ? Si ≤ `cfg.KAFKA_NUM_PARTITIONS` → **🔴 bug de scalabilité**.
+- Toute clé catégorielle de petite cardinalité utilisée pour partitionner.
+
+Bon partitionnement : soit `key = entity_id_bytes` et `partition=None` (Kafka hache la clé), soit `partition=None` (round-robin par défaut de confluent_kafka).
+
+#### 3.5.3 Chemins chauds avec un appel réseau par message
+
+```bash
+# Commit Kafka par message (vs commit batché)
+grep -n "consumer.commit" kafka_consumer.py 2>/dev/null
+
+# Insert SQL par message (vs batched)
+grep -n "insert_sync\|executemany\|\.insert(" LoggerSQLExporter.py kafka_consumer.py 2>/dev/null
+```
+
+Si `consumer.commit()` est appelé dans la boucle principale **chaque message** (et pas toutes les N secondes/messages), c'est un goulot perf. Idem pour `insert_sync`.
+
+Ce n'est pas un bug fonctionnel mais un **signal 🟡 de plafond de débit**. Noter : "débit max théorique ≈ 1 / (latence SQL + latence Kafka commit)".
+
+#### 3.5.4 Chemin async/sync dual où un seul est utilisé
+
+```bash
+# Indice : une classe a deux méthodes 'export' et 'insert_sync' exposées
+grep -n "def export\|def insert_sync\|def add_data" LoggerSQLExporter.py 2>/dev/null
+```
+
+Si `export()` (async, via Timer) coexiste avec `insert_sync()` (sync direct) et que **le chemin chaud (`kafka_consumer.py`) n'appelle que `insert_sync`**, alors la machinerie `export()` + Timer est morte sur le chemin utile. Coût : threads Timer qui tournent en boucle vide, complexité shutdown.
+
+Signale comme 🟡 "dette architecturale : système d'export async en place mais inutilisé dans le flow Kafka".
+
 **Annonce** : "Phase 3/7 — Détection de bugs potentiels..."
 
 ---
@@ -388,13 +447,22 @@ Ne lance PAS /ship depuis cet audit — c'est toi qui décides quoi corriger et 
 
 ---
 
-## 8. Ce qui n'a PAS pu être audité
+## 8. Ce qui n'a PAS pu être audité (et comment le compléter)
 
 <Liste ce que tu n'as pas pu vérifier et pourquoi :
 - "L'exécution réelle du pipeline (pas de broker Kafka local)"
 - "Les performances sous charge"
 - "La cohérence avec un schéma SQL réel (pas d'accès à la DB)"
+- "Le comportement de la file commit/shutdown en présence de Ctrl+C réel"
 - etc.>
+
+**Recommandation explicite** : l'audit statique a des limites. Certains bugs (log spam runtime, partitioning déséquilibré, shutdown réel) ne se révèlent qu'à l'exécution. Pour compléter cet audit :
+
+```
+/smoke-test             → test end-to-end + mesure de débit (produit docs/baseline-test-<date>.md)
+```
+
+Si le dernier `docs/baseline-test-*.md` est récent (< 24h) et cohérent avec le commit actuel, **mentionne ses findings dans la section "Bugs potentiels"** de ce rapport (recoupement audit statique ↔ observation runtime).
 ```
 
 **Annonce finale** :
@@ -412,6 +480,7 @@ Problèmes importants : <N>
 Améliorations : <N>
 
 Pour lire le rapport : cat docs/audit-report-<date>.md
+Pour compléter par un test runtime : /smoke-test
 Pour une explication simple : /explain le rapport d'audit
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
