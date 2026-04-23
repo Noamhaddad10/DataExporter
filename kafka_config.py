@@ -50,7 +50,7 @@ MESSAGE_LENGTH: int     = _RAW["message_length"]
 EXPORT_DELAY: float     = _RAW["export_delay"]
 EXPORT_SIZE: int        = _RAW["export_size"]
 ENTITY_LOCS_PER_SEC: int= _RAW["entity_locations_per_second"]
-TRACKED_TABLES: list    = _RAW["tracked_tables"].replace(" ", "").split(",")
+TRACKED_TABLES: list    = [t for t in _RAW["tracked_tables"].replace(" ", "").split(",") if t]
 SCENARIO: Any           = _RAW.get("Scenario", None)
 SQL_SERVER: str         = _RAW.get("sql_server", r"localhost\SQLEXPRESS")
 
