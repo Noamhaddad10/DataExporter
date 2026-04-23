@@ -232,7 +232,7 @@ def register_logger_in_db(
     logger_file: str,
     start_time: float,
     stop_writing_event: multiprocessing.Event,
-) -> None:
+) -> "LoggerSQLExporter":
     """
     Inserts the startup row into dbo.Loggers.
     Identical to what logger.py does with lse.export("Loggers", ...).
@@ -255,6 +255,7 @@ def register_logger_in_db(
     )
     lse.export("Loggers", start_logger_data)
     print(f"[main] Loggers row inserted for '{logger_file}'")
+    return lse
 
 
 # ---------------------------------------------------------------------------
@@ -314,8 +315,9 @@ def main() -> None:
     # 5. Insert into dbo.Loggers
     # ----------------------------------------------------------------
     stop_writing_event_main = multiprocessing.Event()
+    main_lse = None
     try:
-        register_logger_in_db(logger_file, start_time, stop_writing_event_main)
+        main_lse = register_logger_in_db(logger_file, start_time, stop_writing_event_main)
     except Exception as exc:
         log.error("Error inserting into Loggers: %s", exc, exc_info=True)
         print(f"[main] Warning: unable to insert into Loggers: {exc}")
@@ -438,6 +440,13 @@ def main() -> None:
     while not log_queue.empty():
         time.sleep(0.1)
     listener.stop()
+
+    # Close main LoggerSQLExporter -- stops Exporter timer threads and disposes engine
+    if main_lse is not None:
+        try:
+            main_lse.close()
+        except Exception as exc:
+            log.warning("main_lse.close() failed: %s", exc)
 
     print("\n[main] === Pipeline stopped gracefully ===")
     print(f"[main] Logger file: {logger_file}")
