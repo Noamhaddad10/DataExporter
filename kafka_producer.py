@@ -117,20 +117,34 @@ def run_producer(
                 kafka_value: bytes = struct.pack("!d", packet_time) + received_data
 
                 # ----------------------------------------------------------------
-                # 4. Determine partition
-                #    The 3rd byte of the DIS PDU = pduType.
-                #    Group same types together -> consistency of caches
-                #    in consumers (notably entity_locs_cache).
+                # 4. Determine partition key
+                #    For EntityStatePdu (pdu_type=1), use entity_id bytes as key
+                #    so Kafka's default partitioner hashes consistently -- this
+                #    preserves cache coherence in LoggerPduProcessor.entity_locs_cache
+                #    across messages of the same entity.
+                #    For all other types, key=None -> round-robin (sticky) across
+                #    partitions, which spreads single-type bursts (e.g. all
+                #    FirePdus) evenly across all consumers.
+                #
+                #    Previous implementation used `partition = pdu_type % N`,
+                #    which routed every FirePdu to partition 2 and every
+                #    DetonationPdu to partition 3, leaving 3 of 4 consumers
+                #    idle on typical mono-type bursts. Fix discovered by
+                #    /smoke-test 2026-04-23.
                 # ----------------------------------------------------------------
                 pdu_type: int = received_data[2]
-                partition: int = pdu_type % cfg.KAFKA_NUM_PARTITIONS
+                if pdu_type == 1 and len(received_data) >= 18:
+                    # Bytes 12:18 = entity_id (siteID:appID:entityID, 2 bytes each)
+                    key: bytes | None = received_data[12:18]
+                else:
+                    key = None
 
                 # ----------------------------------------------------------------
                 # 5. Send to Kafka (non-blocking)
                 #    produce() adds to the producer's internal buffer.
                 #    Actual network send happens via poll() or flush().
                 # ----------------------------------------------------------------
-                _produce_with_retry(producer, kafka_value, partition)
+                _produce_with_retry(producer, kafka_value, key)
                 count_sent += 1
 
                 # ----------------------------------------------------------------
@@ -239,7 +253,7 @@ def _create_udp_socket(port: int, message_length: int) -> socket.socket:
 def _produce_with_retry(
     producer: Producer,
     value: bytes,
-    partition: int,
+    key: bytes | None,
     max_retries: int = 3,
 ) -> None:
     """
@@ -252,16 +266,17 @@ def _produce_with_retry(
     Parameters
     ----------
     producer    : Producer confluent_kafka
-    value       : bytes -- message payload (packet_time + pdu_raw)
-    partition   : int   -- target partition
-    max_retries : int   -- number of attempts before giving up
+    value       : bytes          -- message payload (packet_time + pdu_raw)
+    key         : bytes | None   -- partition key (entity_id for type 1,
+                                    None for round-robin otherwise)
+    max_retries : int            -- number of attempts before giving up
     """
     for attempt in range(max_retries):
         try:
             producer.produce(
                 topic=cfg.KAFKA_TOPIC,
                 value=value,
-                partition=partition,
+                key=key,
                 on_delivery=_delivery_report,
             )
             return  # success
