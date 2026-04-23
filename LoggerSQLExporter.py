@@ -1,3 +1,20 @@
+"""
+LoggerSQLExporter.py
+====================
+Bridges the parsed PDU queue to SQL Server (schema `dis`, + `dbo.Loggers`).
+
+LoggerSQLExporter owns one sqlalchemy engine per process and manages one
+Exporter instance per target table. Each Exporter runs a background Timer
+thread that accumulates rows and flushes them in batches.
+
+Used in two modes:
+- Synchronous (kafka_consumer): insert_sync() bypasses the Timer thread and
+  commits directly before the Kafka offset advances -> at-least-once guarantee.
+- Asynchronous (legacy): export() adds to Exporter.data, drained by Timer.
+
+close() must be called on shutdown to stop Timer threads and release pooled
+SQL connections.
+"""
 import sys
 
 sys.setrecursionlimit(sys.getrecursionlimit() * 5)
@@ -41,6 +58,8 @@ class Exporter:
     This is useful since one must wait for SQL to return that the entry of data was a success, but if it's split off
     to another thread, then it doesn't affect the mainloop.
     """
+
+    MAX_ACCUMULATE = 10  # EntityLocations: max re-queue attempts before forced flush
 
     def __init__(self, stop_event: multiprocessing.Event, table_name: str, sql_meta: sqlalchemy.MetaData,
                  sql_engine: sqlalchemy.engine, tracked_tables: list, start_time, export_delay, export_size, data=None):
@@ -97,12 +116,11 @@ class Exporter:
                 # If the main thread has finished, then no more data will reach here, and so this thread can end
                 threading.Timer(1, self.export).start()
         elif self.table_name == "EntityLocations":
-            if len(data) < self.export_size and self.count > 0:
+            if len(data) < self.export_size and self.count < self.MAX_ACCUMULATE:
                 self.count += 1
                 with self.lock:
                     self.data.extend(data)
                 threading.Timer(self.export_delay, self.export).start()
-                time.sleep(0.05)
                 return
             else:
                 self.count = 0
@@ -274,6 +292,29 @@ class LoggerSQLExporter:
         except Exception as exc:
             log.error("insert_sync table=%s failed: %s", table, exc, exc_info=True)
             return False
+
+    def close(self, timeout: float = 2.0) -> None:
+        """
+        Graceful shutdown: signals Exporter threads to stop and disposes the SQL engine.
+
+        - Sets self.stop_event so Exporter.export() stops scheduling new Timers.
+        - Waits `timeout` seconds for in-flight Timers to terminate.
+        - Disposes self.sql_engine (closes all pooled connections).
+
+        Idempotent: safe to call multiple times.
+        """
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        try:
+            self.stop_event.set()
+        except Exception:
+            pass
+        time.sleep(timeout)
+        try:
+            self.sql_engine.dispose()
+        except Exception as exc:
+            log.warning("sql_engine.dispose() failed: %s", exc)
 
 
 # def load_file_data(logger_file: str, db_name: str, exercise_id: int, new_db=False, debug=False): #TODO update this function
