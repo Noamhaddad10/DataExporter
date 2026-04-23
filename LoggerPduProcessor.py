@@ -1,3 +1,16 @@
+"""
+LoggerPduProcessor.py
+=====================
+Parses raw DIS 7 PDU bytes and routes structured rows to the export queue.
+
+Each Kafka consumer instantiates its own LoggerPduProcessor with a local queue.
+LoggerPduProcessor.process() dispatches by PDU type (EntityState, Fire, Detonation,
+AggregateState) and fills the queue with (table_name, [dict]) tuples drained
+by the consumer before committing Kafka offsets.
+
+Internal caches (entity_locs_cache, entities_cache, agr_cache) deduplicate
+rows by entity/aggregate ID and time partition.
+"""
 import sys
 sys.setrecursionlimit(sys.getrecursionlimit() * 5)
 import datetime

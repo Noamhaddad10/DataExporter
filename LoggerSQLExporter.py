@@ -1,3 +1,20 @@
+"""
+LoggerSQLExporter.py
+====================
+Bridges the parsed PDU queue to SQL Server (schema `dis`, + `dbo.Loggers`).
+
+LoggerSQLExporter owns one sqlalchemy engine per process and manages one
+Exporter instance per target table. Each Exporter runs a background Timer
+thread that accumulates rows and flushes them in batches.
+
+Used in two modes:
+- Synchronous (kafka_consumer): insert_sync() bypasses the Timer thread and
+  commits directly before the Kafka offset advances -> at-least-once guarantee.
+- Asynchronous (legacy): export() adds to Exporter.data, drained by Timer.
+
+close() must be called on shutdown to stop Timer threads and release pooled
+SQL connections.
+"""
 import sys
 
 sys.setrecursionlimit(sys.getrecursionlimit() * 5)
