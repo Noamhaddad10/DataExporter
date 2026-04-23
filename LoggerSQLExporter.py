@@ -275,6 +275,29 @@ class LoggerSQLExporter:
             log.error("insert_sync table=%s failed: %s", table, exc, exc_info=True)
             return False
 
+    def close(self, timeout: float = 2.0) -> None:
+        """
+        Graceful shutdown: signals Exporter threads to stop and disposes the SQL engine.
+
+        - Sets self.stop_event so Exporter.export() stops scheduling new Timers.
+        - Waits `timeout` seconds for in-flight Timers to terminate.
+        - Disposes self.sql_engine (closes all pooled connections).
+
+        Idempotent: safe to call multiple times.
+        """
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        try:
+            self.stop_event.set()
+        except Exception:
+            pass
+        time.sleep(timeout)
+        try:
+            self.sql_engine.dispose()
+        except Exception as exc:
+            log.warning("sql_engine.dispose() failed: %s", exc)
+
 
 # def load_file_data(logger_file: str, db_name: str, exercise_id: int, new_db=False, debug=False): #TODO update this function
 #     """
