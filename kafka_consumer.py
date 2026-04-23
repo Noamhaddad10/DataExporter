@@ -314,6 +314,10 @@ def run_consumer(
         _drain_and_export(processing_queue, lse, consumer_id, offset=-1)
 
         consumer.close()
+        try:
+            lse.close()
+        except Exception as exc:
+            log.warning("Consumer %d | lse.close() failed: %s", consumer_id, exc)
         log.info(
             "Consumer %d | Stopped gracefully | total consumed=%d | exported=%d | errors=%d",
             consumer_id, count_consumed, count_exported, count_errors
