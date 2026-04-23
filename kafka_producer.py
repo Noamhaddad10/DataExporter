@@ -143,8 +143,12 @@ def run_producer(
                 # PDU too short to have a byte[2] -- ignore
                 log.warning("Too-short PDU received (%d bytes) -- ignored", len(received_data))
                 continue
+            except socket.timeout:
+                # Expected: 1s socket timeout is the mechanism used to check
+                # stop_event periodically. Not an error -- just loop back.
+                continue
             except OSError as exc:
-                # Socket error (e.g. port already in use, interface down)
+                # Real socket error (e.g. port already in use, interface down)
                 log.error("UDP socket error: %s", exc, exc_info=True)
                 count_errors += 1
                 continue
