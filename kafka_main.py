@@ -436,17 +436,18 @@ def main() -> None:
         producer_process.terminate()
         producer_process.join(timeout=5)
 
-    # Stop the log listener
-    while not log_queue.empty():
-        time.sleep(0.1)
-    listener.stop()
-
-    # Close main LoggerSQLExporter -- stops Exporter timer threads and disposes engine
+    # Close main LoggerSQLExporter BEFORE stopping log listener,
+    # so any warning emitted by close() still reaches dis-kafka.log
     if main_lse is not None:
         try:
             main_lse.close()
         except Exception as exc:
             log.warning("main_lse.close() failed: %s", exc)
+
+    # Stop the log listener
+    while not log_queue.empty():
+        time.sleep(0.1)
+    listener.stop()
 
     print("\n[main] === Pipeline stopped gracefully ===")
     print(f"[main] Logger file: {logger_file}")
