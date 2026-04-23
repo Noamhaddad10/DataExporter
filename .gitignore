@@ -16,3 +16,5 @@ UniSimERs.xlsx
 Enums.xlsx
 .venv/
 output/
+.claude/settings.local.json
+.claude/reports/
