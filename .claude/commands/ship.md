@@ -30,8 +30,7 @@ $ARGUMENTS
 2. Si la description est vague, pose 2-4 questions courtes pour cadrer
 3. Vérifie `git status` clean et branche actuelle
 4. Rédige le body de l'issue au format structuré (Contexte / Périmètre / Fichiers à créer ou modifier / Décisions liées / Comment vérifier / Notes)
-5. **Pause mini** : affiche le body et demande "Je crée cette issue ? (oui / ajuste / stop)"
-6. Sur `oui` : `gh issue create`, récupère le numéro, crée `feature/<N>-<slug>`, checkout
+5. Crée directement l'issue sans demander confirmation : `gh issue create`, récupère le numéro, crée `feature/<N>-<slug>`, checkout
 7. Annonce : `✅ Issue #<N> créée, branche feature/<N>-<slug> checkout`
 
 ### Phase 2 — Planification (équivalent /plan)
