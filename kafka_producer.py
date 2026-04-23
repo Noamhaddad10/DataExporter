@@ -11,9 +11,13 @@ Kafka message format:
     struct.pack("!d", packet_time)  [8 bytes, big-endian]
     + received_data                 [N bytes, raw UDP bytes]
 
-Partitioning: pdu_type % NUM_PARTITIONS
-    -> all EntityStatePdu go to the same partition
-    -> ensures consistency of entity_locs_cache in each consumer
+Partitioning:
+    - EntityStatePdu (pdu_type=1): key = entity_id bytes (12:18),
+      Kafka's default partitioner hashes the key consistently
+      -> all PDUs of the same entity land on the same partition
+      -> ensures consistency of entity_locs_cache in each consumer
+    - All other types: key=None -> sticky round-robin across partitions
+      -> spreads mono-type bursts (e.g. FirePdus) evenly across consumers
 """
 
 import datetime
