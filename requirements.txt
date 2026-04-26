@@ -2,4 +2,9 @@ confluent-kafka>=2.3.0
 sqlalchemy>=2.0.0
 pyodbc>=5.0.0
 pandas>=2.0.0
-opendis==1.0
+# opendis : la version PyPI 1.0 ne contient pas AggregateStatePdu (type 33).
+# On utilise une build custom depuis le commit GitHub 9911bcf9
+# (dernière version où AggregateStatePdu existe ET l'API EntityID legacy est
+# encore en place : entityID.siteID/applicationID/entityID).
+# Voir docs/INSTALL-PROD.md et transfer-kit/MANIFEST.md pour la procédure de build.
+opendis==1.1.0a4+aggregatepdu
