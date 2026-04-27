@@ -48,6 +48,8 @@ def run_consumer(
     log_queue: Queue,
     logger_file: str,
     start_time: float,
+    group_id_override: str | None = None,
+    auto_offset_reset_override: str | None = None,
 ) -> None:
     """
     Entry point of the Kafka consumer process.
@@ -106,7 +108,7 @@ def run_consumer(
     log.info("Consumer %d | LoggerSQLExporter initialized", consumer_id)
 
     # --- Initialize Kafka Consumer ---
-    consumer = _create_consumer(consumer_id)
+    consumer = _create_consumer(consumer_id, group_id_override, auto_offset_reset_override)
 
     # --- Counters for stats ---
     count_consumed: int   = 0   # messages received from Kafka
@@ -329,17 +331,36 @@ def run_consumer(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _create_consumer(consumer_id: int) -> Consumer:
+def _create_consumer(
+    consumer_id: int,
+    group_id_override: str | None = None,
+    auto_offset_reset_override: str | None = None,
+) -> Consumer:
     """
     Creates and returns a configured confluent_kafka Consumer.
     Each consumer has a unique client.id to facilitate monitoring.
+
+    When group_id_override is set, it replaces cfg.KAFKA_GROUP_ID --
+    used by the fresh-start mode in kafka_main to ensure consumers
+    start as a brand new group (no inherited committed offset).
+
+    When auto_offset_reset_override is set (typically "latest"),
+    it overrides cfg.KAFKA_CONSUMER_CONFIG['auto.offset.reset'] for
+    the same fresh-start scenario.
     """
     config = dict(cfg.KAFKA_CONSUMER_CONFIG)
     config["client.id"] = f"dis-consumer-{consumer_id}"
+    if group_id_override is not None:
+        config["group.id"] = group_id_override
+    if auto_offset_reset_override is not None:
+        config["auto.offset.reset"] = auto_offset_reset_override
 
     try:
         consumer = Consumer(config)
-        log.info("Consumer %d | Kafka Consumer initialized | bootstrap=%s", consumer_id, cfg.KAFKA_BOOTSTRAP)
+        log.info(
+            "Consumer %d | Kafka Consumer initialized | bootstrap=%s | group.id=%s | auto.offset.reset=%s",
+            consumer_id, cfg.KAFKA_BOOTSTRAP, config["group.id"], config["auto.offset.reset"]
+        )
         return consumer
     except KafkaException as exc:
         log.critical("Unable to create Consumer %d: %s", consumer_id, exc)

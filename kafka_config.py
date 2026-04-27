@@ -77,6 +77,12 @@ KAFKA_GROUP_ID: str     = _KAFKA_CFG.get("group_id", "dis-export-group")
 # Number of consumers to instantiate in kafka_main.py
 KAFKA_NUM_CONSUMERS: int = _KAFKA_CFG.get("num_consumers", 4)
 
+# When True, kafka_main.py deletes and recreates the topic at startup,
+# so each run starts with a clean Kafka log. Useful when you separate
+# data scenario-by-scenario and never need to replay older messages
+# from Kafka. Default False to preserve at-least-once replay capability.
+KAFKA_RESET_TOPIC_ON_STARTUP: bool = _KAFKA_CFG.get("reset_topic_on_startup", False)
+
 # ---------------------------------------------------------------------------
 # confluent_kafka Producer configuration
 # ---------------------------------------------------------------------------

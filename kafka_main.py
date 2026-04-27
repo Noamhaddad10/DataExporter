@@ -35,7 +35,7 @@ import urllib.parse
 
 import pandas as pd
 import sqlalchemy
-from confluent_kafka.admin import AdminClient, KafkaException
+from confluent_kafka.admin import AdminClient, KafkaException, NewTopic
 
 import kafka_config as cfg
 from kafka_producer import run_producer
@@ -295,6 +295,30 @@ def main() -> None:
     print("[main] Prerequisites OK\n")
 
     # ----------------------------------------------------------------
+    # 2bis. Fresh-start mode (skip pre-existing messages)
+    #
+    # When KAFKA_RESET_TOPIC_ON_STARTUP is True we generate a unique
+    # consumer group id for this run AND tell consumers to start at
+    # the end of the log. Net effect: any messages produced before
+    # this run are ignored, this scenario starts on a clean slate.
+    #
+    # We deliberately do NOT delete the topic physically. Deleting
+    # segments triggers a chronic "log dirs have failed" bug on
+    # Windows when the OS still holds file handles. The fresh-start
+    # approach achieves the same observable behavior without ever
+    # asking the broker to remove disk segments.
+    # ----------------------------------------------------------------
+    if cfg.KAFKA_RESET_TOPIC_ON_STARTUP:
+        run_id = int(time.time())
+        effective_group_id = f"{cfg.KAFKA_GROUP_ID}-run-{run_id}"
+        consumer_offset_reset = "latest"
+        print(f"[main] Fresh-start mode: group_id={effective_group_id} (skipping any pre-existing messages)")
+        log.info("Fresh-start mode active -- group_id=%s, auto.offset.reset=latest", effective_group_id)
+    else:
+        effective_group_id = cfg.KAFKA_GROUP_ID
+        consumer_offset_reset = None  # use default from kafka_config
+
+    # ----------------------------------------------------------------
     # 3. Logger file name resolution
     # ----------------------------------------------------------------
     try:
@@ -345,7 +369,8 @@ def main() -> None:
     for i in range(cfg.KAFKA_NUM_CONSUMERS):
         p = multiprocessing.Process(
             target=run_consumer,
-            args=(i, stop_event, log_queue, logger_file, start_time),
+            args=(i, stop_event, log_queue, logger_file, start_time,
+                  effective_group_id, consumer_offset_reset),
             name=f"KafkaConsumer-{i}",
             daemon=False,
         )
@@ -394,7 +419,8 @@ def main() -> None:
                     print(f"[main] WARNING: Consumer-{i} stopped -- restarting...")
                     new_p = multiprocessing.Process(
                         target=run_consumer,
-                        args=(i, stop_event, log_queue, logger_file, start_time),
+                        args=(i, stop_event, log_queue, logger_file, start_time,
+                              effective_group_id, consumer_offset_reset),
                         name=f"KafkaConsumer-{i}",
                         daemon=False,
                     )
