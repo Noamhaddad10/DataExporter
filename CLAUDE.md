@@ -2,7 +2,7 @@
 
 > **Pour toi (Noam)** : ce fichier est chargé automatiquement par Claude au début de chaque session sur ce projet. C'est ma "mémoire externe" pour reprendre exactement là où on en est, même si la conversation est réinitialisée. Je m'engage à le tenir à jour à la fin de chaque session significative.
 
-> **Dernière mise à jour** : 2026-04-27 (session GUI launcher fonctionnel + DEV tools)
+> **Dernière mise à jour** : 2026-04-27 (logger_file naming sous contrôle launcher + kit refresh PyQt5)
 
 ---
 
@@ -68,6 +68,22 @@ Source archive gardée localement : `C:\DataExporter-prod-test\opendis-source\op
 ---
 
 ## 4. Décisions clés (chronologique, plus récente en premier)
+
+### 2026-04-27 (suite 2)
+- **Logger_file naming sous contrôle du launcher** (commit à venir) :
+  - Nouveau flag `kafka_config.DISABLE_LOGGER_FILE_RESOLUTION` (défaut False).
+  - `kafka_main.resolve_logger_file()` court-circuitée si flag True : utilise le `logger_file` du config tel quel.
+  - Le launcher écrit `disable_logger_file_resolution=true` à chaque Start.
+  - Au **Save preset**, le launcher check `dbo.Loggers` : si conflit, popup avec suggestion `_N+1`, user accepte ou refuse (avec warning).
+  - Au **Start**, re-check de sécurité : auto-bump silencieux + log clair si conflit nouveau.
+  - Banner RUNNING affiche désormais le **vrai** nom (pas le preset, le nom utilisé en SQL).
+- **Bug timing fix** (commit dans le launcher) : avant, le launcher disait "Pipeline ready" dès "Listening UDP" (du producer). Mais les 4 consumers prenaient encore ~30s à subscribe. Conséquence : avec `auto.offset.reset=latest`, les PDUs envoyés tôt étaient skippés. Fix : attendre `Subscribed to topic` × N consumers + 5s grace (partition assignment).
+- **Kit transfer refresh** (~410 MB) :
+  - Ajout PyQt5 + PyQt5-Qt5 + PyQt5-sip dans `python-offline-packages/` (3 wheels supplémentaires)
+  - launcher.py + kafka_main.py + kafka_config.py mis à jour dans `data-exporter/`
+  - requirements.txt inclut PyQt5
+  - MANIFEST.md + INSTALL-PROD.md mis à jour
+  - **Test offline strict réussi** : install + import launcher + AggregateStatePdu OK depuis venv 100% offline
 
 ### 2026-04-27 (suite)
 - **GUI launcher PyQt5** ajouté (`launcher.py` à la racine). Pilote Kafka + kafka_main.py via subprocess.Popen avec `CREATE_NEW_PROCESS_GROUP` (pour pouvoir envoyer `CTRL_BREAK_EVENT` au shutdown).

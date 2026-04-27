@@ -238,6 +238,61 @@ def _read_active_config():
         return {}
 
 
+def _resolve_unique_logger_name(sql_server, db_name, base_name, timeout=3):
+    """
+    Returns (final_name, was_renamed).
+    Checks dbo.Loggers for any existing row with LoggerFile == base_name.
+    If found, finds the next free `_N` suffix.
+    base_name should already include the .lzma extension.
+    On DB error, returns (base_name, False) and lets the caller proceed.
+    """
+    import re
+    if not base_name.lower().endswith(".lzma"):
+        base_name = base_name + ".lzma"
+
+    try:
+        import sqlalchemy
+        conn_str = (
+            f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+            f"SERVER={sql_server};DATABASE={db_name};Trusted_Connection=yes;"
+            f"Connection Timeout={timeout};"
+        )
+        engine = sqlalchemy.create_engine(
+            "mssql+pyodbc:///?odbc_connect=" + urllib.parse.quote_plus(conn_str),
+            pool_pre_ping=True,
+        )
+        bare = base_name[:-len(".lzma")]
+        with engine.connect() as conn:
+            rows = conn.execute(
+                sqlalchemy.text(
+                    "SELECT LoggerFile FROM dbo.Loggers WHERE LoggerFile LIKE :pat"
+                ),
+                {"pat": f"{bare}%"},
+            ).fetchall()
+        engine.dispose()
+        existing = {r[0] for r in rows}
+    except Exception:
+        return base_name, False
+
+    if base_name not in existing:
+        return base_name, False
+
+    # Conflict -- find a free suffix.
+    # If bare already ends with _<N>, increment N. Otherwise start at _1.
+    m = re.match(r"(.+)_(\d+)$", bare)
+    if m:
+        stem = m.group(1)
+        start = int(m.group(2)) + 1
+    else:
+        stem = bare
+        start = 1
+    for i in range(start, start + 1000):
+        cand = f"{stem}_{i}.lzma"
+        if cand not in existing:
+            return cand, True
+    return base_name, False  # gave up after 1000 attempts
+
+
 def _ensure_topic_exists(broker, topic, num_partitions, log_emit):
     """Creates the topic if it does not exist. Returns True on success."""
     try:
@@ -414,13 +469,32 @@ class StartSequenceWorker(QThread):
             # Step 1: write active preset into DataExporterConfig.json
             self.progress.emit(f"Writing active preset ({self.active_mode.upper()}) to DataExporterConfig.json")
             cfg = _read_active_config()
+
+            # Re-check logger_file conflict at start time (covers the case
+            # where another run created a row between Save and Start). If
+            # conflict, silently auto-bump and announce the new name.
+            sql_server = cfg.get("sql_server", r"localhost\SQLEXPRESS")
+            requested_lf = self.active_preset["logger_file"]
+            final_lf, renamed = _resolve_unique_logger_name(
+                sql_server, self.active_preset["database_name"], requested_lf
+            )
+            if renamed:
+                self.progress.emit(
+                    f"NOTE: '{requested_lf}' already exists in dbo.Loggers -- "
+                    f"auto-bumped to '{final_lf}' for this run."
+                )
+
             cfg["exercise_id"]   = self.active_preset["exercise_id"]
             cfg["PORT"]          = self.active_preset["port"]
-            cfg["logger_file"]   = self.active_preset["logger_file"]
+            cfg["logger_file"]   = final_lf
             cfg["database_name"] = self.active_preset["database_name"]
             # Force fresh-start mode so each scenario starts with a clean Kafka view
             cfg.setdefault("kafka", {})
             cfg["kafka"]["reset_topic_on_startup"] = True
+            # Tell kafka_main.py NOT to rewrite logger_file -- we (the launcher)
+            # already handled naming. Without this, kafka_main would rename
+            # exp_27_4_1.lzma to exp_<today_day>_<today_month>_<N>.lzma
+            cfg["disable_logger_file_resolution"] = True
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=4)
 
@@ -497,29 +571,54 @@ class StartSequenceWorker(QThread):
                 stderr=subprocess.DEVNULL,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
             )
-            # Wait for "Listening UDP on port" in dis-kafka.log
-            target = "Listening UDP on port"
-            deadline = time.monotonic() + 60.0
-            seen = False
+            # Wait for FULL readiness:
+            #   1. Producer has bound the UDP socket ("Listening UDP on port")
+            #   2. ALL N consumers have subscribed ("Subscribed to topic" x N)
+            #   3. A short grace period (5s) for partition assignment to
+            #      settle and consumers to fetch their initial position.
+            #
+            # The grace period is critical with auto.offset.reset=latest:
+            # any message produced BEFORE consumers fetch their position
+            # would be silently skipped (consumers anchor at "latest"
+            # offset only after their first successful poll).
+            needed_consumers = int(cfg.get("kafka", {}).get("num_consumers", 4))
+            self.progress.emit(f"Waiting for producer + {needed_consumers} consumers to subscribe...")
+            deadline = time.monotonic() + 120.0
+            producer_ready = False
+            consumer_count = 0
             while time.monotonic() < deadline:
                 if LOG_PATH.exists():
                     try:
                         with open(LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
-                            if target in f.read():
-                                seen = True
-                                break
+                            content = f.read()
+                            if "Listening UDP on port" in content:
+                                producer_ready = True
+                            consumer_count = content.count("Subscribed to topic")
                     except Exception:
                         pass
+                if producer_ready and consumer_count >= needed_consumers:
+                    break
                 if self.pipeline_proc.poll() is not None:
                     self.finished_fail.emit("Pipeline (kafka_main.py) exited unexpectedly during start")
                     return
                 time.sleep(0.5)
 
-            if not seen:
-                self.finished_fail.emit("Pipeline did not become ready in 60s (no 'Listening UDP' in dis-kafka.log)")
+            if not (producer_ready and consumer_count >= needed_consumers):
+                self.finished_fail.emit(
+                    f"Pipeline did not become ready in 120s "
+                    f"(producer={producer_ready}, consumers={consumer_count}/{needed_consumers})"
+                )
                 return
 
-            self.progress.emit("Pipeline is up and listening")
+            self.progress.emit(
+                f"Producer + {consumer_count} consumers subscribed. "
+                f"Waiting 5s for partition assignment + first poll to settle..."
+            )
+            # Without this sleep, messages produced immediately after "ready"
+            # may be skipped by consumers using auto.offset.reset=latest.
+            time.sleep(5.0)
+
+            self.progress.emit("Pipeline is FULLY ready -- safe to send PDUs now")
             self.status_update.emit("pipeline", "up")
 
             kafka_pid = self.kafka_proc.pid if self.kafka_proc else 0
@@ -600,6 +699,7 @@ class LauncherWindow(QMainWindow):
         self.start_worker = None
         self.stop_worker = None
         self.log_tail = None
+        self._actual_logger_file = None
 
         self._build_ui()
         self._populate_fields_for_mode(self.active_mode)
@@ -894,8 +994,13 @@ class LauncherWindow(QMainWindow):
         self.dev_radio.setEnabled(False)
         self.prod_radio.setEnabled(False)
         active = self.presets[self.active_mode]
+        # Use the RESOLVED logger_file (the one kafka_main actually uses in SQL)
+        # if available, otherwise fall back to the preset value.
+        logger_file_displayed = getattr(self, "_actual_logger_file", None) \
+                                or active["logger_file"]
         self.running_logger.setText(
-            f"<b>Logger :</b> {active['logger_file']} &nbsp;&nbsp;|&nbsp;&nbsp; "
+            f"<b>Logger :</b> <span style='color:#1a4d7c;'>{logger_file_displayed}</span> "
+            f"&nbsp;&nbsp;|&nbsp;&nbsp; "
             f"<b>Database :</b> {active.get('database_name', '?')}"
         )
         self.running_exercise.setText(
@@ -909,10 +1014,12 @@ class LauncherWindow(QMainWindow):
         # DEV tools panel: show only in DEV mode
         if self.active_mode == "dev":
             self.send_btn.setEnabled(True)
+            sql_filter = f"WHERE LoggerFile = '{logger_file_displayed}'"
             self.send_progress_label.setText(
                 "<span style='color:#7f8c8d;font-size:9pt;'>"
-                f"PDUs are sent over UDP to localhost:{active['port']} with "
-                f"exerciseID={active['exercise_id']}."
+                f"PDUs sent over UDP to localhost:{active['port']} with "
+                f"exerciseID={active['exercise_id']}.<br>"
+                f"To check in SQL: <code>SELECT COUNT(*) FROM dis.FirePdu {sql_filter}</code>"
                 "</span>"
             )
             self.dev_tools_box.show()
@@ -929,6 +1036,8 @@ class LauncherWindow(QMainWindow):
         self.start_btn.setEnabled(True)
         self.dev_radio.setEnabled(True)
         self.prod_radio.setEnabled(True)
+        # Clear the resolved logger_file so the next run starts clean
+        self._actual_logger_file = None
 
     def _log(self, msg):
         ts = time.strftime("%H:%M:%S")
@@ -948,9 +1057,46 @@ class LauncherWindow(QMainWindow):
 
     def _on_save_presets(self):
         self._capture_active_preset_into_memory()
+        active = self.presets[self.active_mode]
+
+        # Normalise: ensure .lzma suffix on the logger_file
+        lf = active["logger_file"]
+        if not lf.lower().endswith(".lzma"):
+            lf = lf + ".lzma"
+            active["logger_file"] = lf
+            self.fld_logger.setText(lf)
+
+        # Check conflict against dbo.Loggers using the active database_name.
+        # Read the SQL server from the existing config (advanced setting).
+        sql_server = _read_active_config().get("sql_server", r"localhost\SQLEXPRESS")
+        db_name = active["database_name"]
+        final, renamed = _resolve_unique_logger_name(sql_server, db_name, lf)
+
+        if renamed:
+            ret = QMessageBox.question(
+                self, "Logger name already used",
+                f"The logger_file '<b>{lf}</b>' already exists in "
+                f"<i>{db_name}</i>.dbo.Loggers.<br><br>"
+                f"Suggested unique name: <b>{final}</b><br><br>"
+                f"Use the suggested name?<br>"
+                f"(<i>Yes</i> = keep '{final}', <i>No</i> = keep '{lf}' anyway "
+                f"[your data will mix with the previous run])",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if ret == QMessageBox.Yes:
+                active["logger_file"] = final
+                self.fld_logger.setText(final)
+                self._log(f"Logger renamed to '{final}' (avoids dbo.Loggers conflict)")
+            else:
+                self._log(
+                    f"WARNING: keeping '{lf}' despite existing rows in dbo.Loggers. "
+                    f"Your scenario data will mix with the previous run."
+                )
+
         self.presets.setdefault("_meta", {})["active_mode"] = self.active_mode
         self._save_presets(self.presets)
-        self._log(f"Preset {self.active_mode.upper()} saved")
+        self._log(f"Preset {self.active_mode.upper()} saved (logger_file: {active['logger_file']})")
 
     def _on_edit_advanced(self):
         if not CONFIG_PATH.exists():
@@ -994,7 +1140,27 @@ class LauncherWindow(QMainWindow):
         self.pipeline_proc = self.start_worker.pipeline_proc
 
         self._log(f"All systems UP -- kafka_pid={kafka_pid or 'reused'} pipeline_pid={pipeline_pid}")
-        self._enter_running_state()
+
+        # Re-read DataExporterConfig.json to capture the RESOLVED logger_file
+        # (kafka_main.py's resolve_logger_file() renames the preset name to
+        # something like exp_<day>_<month>_<N>.lzma based on existing dbo.Loggers
+        # rows. Without this re-read, the GUI banner would still show the
+        # preset name -- which does NOT match what's written in dis.FirePdu
+        # rows, so SQL filters by LoggerFile would return nothing.)
+        cfg_after_start = _read_active_config()
+        actual_logger = cfg_after_start.get(
+            "logger_file",
+            self.presets[self.active_mode].get("logger_file", "?"),
+        )
+        self._actual_logger_file = actual_logger
+        if actual_logger != self.presets[self.active_mode].get("logger_file"):
+            self._log(
+                f"NOTE: kafka_main renamed logger_file from "
+                f"'{self.presets[self.active_mode].get('logger_file')}' to "
+                f"'{actual_logger}' (auto-rotation by date / existing runs). "
+                f"Use this name to filter your SQL queries."
+            )
+        self._enter_running_state()  # uses self._actual_logger_file
 
         # Start tailing dis-kafka.log
         self.log_tail = LogTailWorker(LOG_PATH)

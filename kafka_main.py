@@ -165,7 +165,22 @@ def resolve_logger_file(db_name: str, logger_raw: str) -> str:
     automatically accepts the suggestion (daemon behaviour).
 
     Returns the final file name (e.g. "exp_14_4_3.lzma").
+
+    When cfg.DISABLE_LOGGER_FILE_RESOLUTION is True, this function is
+    short-circuited: the caller-provided name is used as-is (just adds
+    .lzma suffix if missing). Used when an external orchestrator like
+    launcher.py wants to control naming and prompt the user explicitly.
     """
+    log = logging.getLogger("main")
+
+    if cfg.DISABLE_LOGGER_FILE_RESOLUTION:
+        final = logger_raw if logger_raw.endswith(".lzma") else f"{logger_raw}.lzma"
+        log.info(
+            "resolve_logger_file: skipped (DISABLE_LOGGER_FILE_RESOLUTION=True). "
+            "Using '%s' as-is.", final
+        )
+        return final
+
     old_logger = logger_raw
     logger = logger_raw.removesuffix(".lzma")
 

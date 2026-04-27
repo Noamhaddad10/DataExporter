@@ -54,6 +54,13 @@ TRACKED_TABLES: list    = [t for t in _RAW["tracked_tables"].replace(" ", "").sp
 SCENARIO: Any           = _RAW.get("Scenario", None)
 SQL_SERVER: str         = _RAW.get("sql_server", r"localhost\SQLEXPRESS")
 
+# When True, kafka_main.resolve_logger_file() is short-circuited and the
+# logger_file from DataExporterConfig.json is used as-is (no auto-rotation
+# by date, no conflict-suffix). Used when an external orchestrator (e.g.
+# launcher.py) already controls the naming and wants the GUI display to
+# match exactly what gets written into dbo.Loggers.
+DISABLE_LOGGER_FILE_RESOLUTION: bool = _RAW.get("disable_logger_file_resolution", False)
+
 # Accepted PDU types (3rd byte of DIS packet = pduType)
 PDU_TYPE_LIST: list[int] = [1, 2, 3, 21, 33]
 
