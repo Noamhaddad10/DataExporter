@@ -2,7 +2,7 @@
 
 > **Pour toi (Noam)** : ce fichier est chargé automatiquement par Claude au début de chaque session sur ce projet. C'est ma "mémoire externe" pour reprendre exactement là où on en est, même si la conversation est réinitialisée. Je m'engage à le tenir à jour à la fin de chaque session significative.
 
-> **Dernière mise à jour** : 2026-04-27 (commit `1e8ddee` — feat fresh-start mode)
+> **Dernière mise à jour** : 2026-04-27 (session GUI launcher fonctionnel + DEV tools)
 
 ---
 
@@ -69,6 +69,17 @@ Source archive gardée localement : `C:\DataExporter-prod-test\opendis-source\op
 
 ## 4. Décisions clés (chronologique, plus récente en premier)
 
+### 2026-04-27 (suite)
+- **GUI launcher PyQt5** ajouté (`launcher.py` à la racine). Pilote Kafka + kafka_main.py via subprocess.Popen avec `CREATE_NEW_PROCESS_GROUP` (pour pouvoir envoyer `CTRL_BREAK_EVENT` au shutdown).
+- Vue **IDLE** (config + start) vs vue **RUNNING** (banner minimal + log live full-screen).
+- **Toggle DEV/PROD** : 4 champs persistés par mode dans `LauncherPresets.json` (gitignoré) — `exercise_id`, `port`, `logger_file`, `database_name`. Le launcher écrit ces valeurs dans `DataExporterConfig.json` au Start.
+- **Force `reset_topic_on_startup: true`** au démarrage du launcher → garantit fresh-start mode même si la config user ne l'a pas.
+- **Theme light/dark** persisté dans `_meta` du presets.json (palette Catppuccin Mocha en dark).
+- **DEV tools panel** (visible en mode DEV + RUNNING) : envoi de N FirePdus à un débit configurable via UDP, avec rate limiting précis via `time.perf_counter()`. Panneau caché en PROD pour éviter envoi accidentel.
+- **Status polling** (5s) : vérifie `localhost:9092` (Kafka) et `SELECT 1` sur la DB en arrière-plan.
+- **Live log tail** : QThread qui suit `dis-kafka.log` ligne par ligne et émet vers le QPlainTextEdit.
+- **Build PyInstaller ready** : détection `sys.frozen` → utilise `kafka_main.exe` à côté de `launcher.exe` en mode build, sinon `python.exe + kafka_main.py`.
+
 ### 2026-04-27
 - **Fresh-start mode** ajouté (`feat: fresh-start mode for scenario isolation between runs`, commit `1e8ddee`). Chaque lancement utilise un `group_id` unique avec timestamp et `auto.offset.reset=latest`. Évite le bug Windows `.deleted` qui se déclenche quand on supprime des segments Kafka.
 - Suppression du script `reset-kafka.bat` (devenu inutile).
@@ -112,6 +123,8 @@ Source archive gardée localement : `C:\DataExporter-prod-test\opendis-source\op
 | Quoi | Où |
 |---|---|
 | **Code projet (dev)** | `C:\Users\hadda\Desktop\WiresharkLogger\` |
+| **GUI launcher (dev)** | `C:\Users\hadda\Desktop\WiresharkLogger\launcher.py` (Tkinter NON, PyQt5) |
+| **Presets launcher** | `C:\Users\hadda\Desktop\WiresharkLogger\LauncherPresets.json` (gitignoré) |
 | **Repo GitHub** | https://github.com/Noamhaddad10/DataExporter |
 | **venv dev** | `C:\Users\hadda\Desktop\WiresharkLogger\.venv\` (Python 3.10.11) |
 | **Kafka local dev** | `C:\kafka\` (port 9092) |
@@ -167,6 +180,7 @@ Les fichiers ont des fonctions `test_*` mais avec des signatures custom (`test_X
 
 ## 8. Open items / décisions pending
 
+- [ ] **Build .exe via PyInstaller** : le launcher est conçu pour fonctionner en mode build (`sys.frozen` détecté). Reste à écrire `scripts/build_launcher.py` qui produit `launcher.exe` + `kafka_main.exe` + bundle PyQt5/wheels. À tester ensuite offline.
 - [ ] **Validation runtime AggregateStatePdu en prod** : à faire au premier scénario réel. Surveiller `dis.Aggregates` et `dis.AggregateLocations` qui doivent se peupler. Si elles restent à 0 alors qu'il y avait des PDUs type 33, creuser dans `dis-kafka.log`.
 - [ ] **Test du shutdown gracieux PR #5** : non validé empiriquement (TaskStop = kill brutal sur Windows). À faire manuellement : `python kafka_main.py` dans console, Ctrl+C, vérifier que ça termine en < 30s avec "Pipeline stopped gracefully".
 - [ ] **Décision sur perte mesurée en prod** : si jamais un scénario perd des messages (vérifié par `Σ Consumer.consumed != Producer.sent`), passer à 3 brokers Kafka + `replication-factor=3` + `min.insync.replicas=2`. Configuration documentée dans la conversation passée et le guide HTML.

@@ -18,3 +18,5 @@ Enums.xlsx
 output/
 .claude/settings.local.json
 .claude/reports/
+LauncherPresets.json
+
