@@ -2,7 +2,7 @@
 
 > **Pour toi (Noam)** : ce fichier est chargé automatiquement par Claude au début de chaque session sur ce projet. C'est ma "mémoire externe" pour reprendre exactement là où on en est, même si la conversation est réinitialisée. Je m'engage à le tenir à jour à la fin de chaque session significative.
 
-> **Dernière mise à jour** : 2026-04-27 (logger_file naming sous contrôle launcher + kit refresh PyQt5)
+> **Dernière mise à jour** : 2026-04-27 (Launch DataExporter.bat ajouté, build PyInstaller écarté)
 
 ---
 
@@ -196,7 +196,7 @@ Les fichiers ont des fonctions `test_*` mais avec des signatures custom (`test_X
 
 ## 8. Open items / décisions pending
 
-- [ ] **Build .exe via PyInstaller** : le launcher est conçu pour fonctionner en mode build (`sys.frozen` détecté). Reste à écrire `scripts/build_launcher.py` qui produit `launcher.exe` + `kafka_main.exe` + bundle PyQt5/wheels. À tester ensuite offline.
+- ✅ **Build .exe PyInstaller** — DÉCIDÉ NON. Le coût (taille +200-300 MB, antivirus, multiprocessing complications, debug compliqué, rebuild à chaque modif) ne justifie pas le bénéfice (1-clic launch). À la place : `Launch DataExporter.bat` à la racine du projet (raccourci bureau possible via clic droit → Envoyer vers → Bureau).
 - [ ] **Validation runtime AggregateStatePdu en prod** : à faire au premier scénario réel. Surveiller `dis.Aggregates` et `dis.AggregateLocations` qui doivent se peupler. Si elles restent à 0 alors qu'il y avait des PDUs type 33, creuser dans `dis-kafka.log`.
 - [ ] **Test du shutdown gracieux PR #5** : non validé empiriquement (TaskStop = kill brutal sur Windows). À faire manuellement : `python kafka_main.py` dans console, Ctrl+C, vérifier que ça termine en < 30s avec "Pipeline stopped gracefully".
 - [ ] **Décision sur perte mesurée en prod** : si jamais un scénario perd des messages (vérifié par `Σ Consumer.consumed != Producer.sent`), passer à 3 brokers Kafka + `replication-factor=3` + `min.insync.replicas=2`. Configuration documentée dans la conversation passée et le guide HTML.
