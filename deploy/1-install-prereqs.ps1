@@ -52,6 +52,17 @@ if (-not (Test-Path $Installers)) {
     exit 1
 }
 
+# tar.exe ships with Windows 10 1803 and later -- needed to extract Kafka.
+# Check up front so we fail loud BEFORE installing Python / Java.
+$tarPath = (Get-Command tar.exe -ErrorAction SilentlyContinue).Source
+if (-not $tarPath) {
+    Write-Fail "tar.exe is not available on this system."
+    Write-Info "tar.exe ships with Windows 10 (April 2018 update / build 1803) and later."
+    Write-Info "Either upgrade Windows, or extract kafka_2.13-3.9.0.tgz manually to C:\kafka before retrying."
+    exit 1
+}
+Write-Info "tar.exe   : $tarPath"
+
 # ---------------------------------------------------------------------------
 # 1. Python 3.10
 # ---------------------------------------------------------------------------

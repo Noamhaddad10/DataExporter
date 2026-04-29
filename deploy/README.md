@@ -11,7 +11,7 @@ the offline transfer kit (USB drive) for actual delivery.
 |---|---|
 | `INSTALL-START-HERE.md` | Step-by-step walkthrough for the operator running the install on prod. Plain English, ~5 manual minutes total. |
 | `1-install-prereqs.ps1` | PowerShell, **admin required**, run **once** per PC. Idempotent install of Python 3.10, Java 17, Apache Kafka 3.9.0, ODBC Driver 17 from the kit's `installers/` folder. |
-| `2-deploy-project.ps1` | PowerShell, **no admin**, re-runnable. Wipes `C:\WiresharkLogger\`, copies the project from the kit, creates a venv, runs `pip install --no-index --find-links ../python-offline-packages/ -r requirements.txt`, smoke-tests imports, formats Kafka storage if first-time. Preserves `DataExporterConfig.json` if the operator has already edited it. |
+| `2-deploy-project.ps1` | PowerShell, **no admin**, re-runnable. Wipes `C:\DataExporterNoamHaddad\`, copies the project from the kit, creates a venv, runs `pip install --no-index --find-links ../python-offline-packages/ -r requirements.txt`, smoke-tests imports, formats Kafka storage if first-time. Preserves `DataExporterConfig.json` if the operator has already edited it. |
 
 ## Relationship with the transfer kit
 

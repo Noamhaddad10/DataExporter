@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Deploy the Data Exporter project to C:\WiresharkLogger and install all
+    Deploy the Data Exporter project to C:\DataExporterNoamHaddad and install all
     Python dependencies offline. Re-runnable: wipes the project folder and
     venv each time, but preserves DataExporterConfig.json if you have edited
     it (e.g. real DB name + SQL server).
@@ -9,12 +9,12 @@
     No administrator rights needed. Run this AFTER 1-install-prereqs.ps1.
 
 .PARAMETER ProjectDir
-    Where the project will live. Default: C:\WiresharkLogger
+    Where the project will live. Default: C:\DataExporterNoamHaddad
 #>
 
 [CmdletBinding()]
 param(
-    [string]$ProjectDir = 'C:\WiresharkLogger'
+    [string]$ProjectDir = 'C:\DataExporterNoamHaddad'
 )
 
 # ---------------------------------------------------------------------------

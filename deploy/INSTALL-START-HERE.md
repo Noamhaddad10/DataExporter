@@ -12,13 +12,17 @@ of which only ~5 minutes need you actively in front of the screen.
 
 ## What the kit does for you
 
-| Script | Run by | What it does | Time |
+| Step | What you double-click | What it does | Time |
 |---|---|---|---|
-| `1-install-prereqs.ps1` | **YOU**, once | Installs Python 3.10, Java 17, Kafka 3.9.0, ODBC Driver 17 | 15-25 min |
-| `2-deploy-project.ps1`  | **YOU**, every update | Copies the project, builds a Python venv, installs all packages offline, formats Kafka storage | 2-3 min |
+| 1 | `INSTALL-1-prereqs.bat` (admin) | Installs Python 3.10, Java 17, Kafka 3.9.0, ODBC Driver 17 | 15-25 min |
+| 2 | `INSTALL-2-deploy.bat` (no admin) | Copies the project, builds a Python venv, installs all packages offline, formats Kafka storage | 2-3 min |
 
-You can re-run `2-deploy-project.ps1` any time the project code changes.
-You should normally only run `1-install-prereqs.ps1` once per PC.
+The `.bat` files are simple wrappers around the `.ps1` scripts. They exist
+because Windows blocks `.ps1` files by default for security; the `.bat`
+launches PowerShell with `-ExecutionPolicy Bypass` so the script just runs.
+
+You can re-run `INSTALL-2-deploy.bat` any time the project code changes.
+You should normally only run `INSTALL-1-prereqs.bat` once per PC.
 
 ---
 
@@ -58,38 +62,33 @@ not work without them.
 > point.
 
 1. Open the kit folder you copied (e.g. `C:\install-data-exporter\transfer-kit\`).
-2. **Right-click** on `1-install-prereqs.ps1`.
-3. Choose **"Run with PowerShell"**.
+2. **Right-click** on `INSTALL-1-prereqs.bat`.
+3. Choose **"Run as administrator"**.
 4. Windows asks: *"Do you want to allow this app to make changes?"* → click **Yes**.
 5. A black window opens. The script tells you what it's doing in colored text:
    - `[OK]` (green) = step succeeded
    - `[SKIP]` (yellow) = already installed, nothing to do
    - `[FAIL]` (red) = something failed, read the error message
-6. Wait until you see **"All prerequisites installed"**. This takes 15-25 min.
-7. Close the window.
+6. Wait until you see **"STEP 1 COMPLETE"** at the bottom. This takes 15-25 min.
+7. Press any key to close the window.
 
-> **If Windows blocks the script** ("running scripts is disabled"):
-> Open PowerShell as Administrator and run:
-> ```powershell
-> Set-ExecutionPolicy -Scope LocalMachine RemoteSigned -Force
-> ```
-> Then retry the right-click → Run with PowerShell.
+> If you forget to right-click → Run as administrator, the script will
+> tell you and exit cleanly. Just retry with the admin option.
 
 ---
 
 ## Step 3 — Deploy the project (no admin)
 
-1. Same kit folder. **Right-click** on `2-deploy-project.ps1`.
-2. Choose **"Run with PowerShell"** (no UAC prompt this time).
-3. The script will:
+1. Same kit folder. **Double-click** `INSTALL-2-deploy.bat`.
+2. The script will:
    - Verify all prerequisites are present
-   - Wipe `C:\WiresharkLogger\` if it exists, and recreate it from the kit
-   - Create a Python virtual environment in `C:\WiresharkLogger\.venv\`
+   - Wipe `C:\DataExporterNoamHaddad\` if it exists, and recreate it from the kit
+   - Create a Python virtual environment in `C:\DataExporterNoamHaddad\.venv\`
    - Install all Python packages from local wheels (offline)
    - Run a smoke test (imports the project + checks `AggregateStatePdu`)
    - Format Kafka storage if it's the first time
-4. Wait until you see **"Deployment OK"** (green). This takes 2-3 min.
-5. The script ends by printing **"WHAT YOU MUST DO NEXT (manually)"**. Read it.
+3. Wait until you see **"STEP 2 COMPLETE"** at the bottom. This takes 2-3 min.
+4. Read the **"WHAT YOU MUST DO NEXT (manually)"** message printed just above. Then press any key to close the window.
 
 > If you re-run this later (e.g. to update the project code), it will preserve
 > the `DataExporterConfig.json` you edited — so you only need to do Step 4 once.
@@ -98,12 +97,12 @@ not work without them.
 
 ## Step 4 — Configure SQL connection (manually)
 
-The script created `C:\WiresharkLogger\DataExporterConfig.json` from the
+The script created `C:\DataExporterNoamHaddad\DataExporterConfig.json` from the
 template, but **you must edit two values** before launching the pipeline.
 
 1. Open the file in Notepad:
    ```
-   C:\WiresharkLogger\DataExporterConfig.json
+   C:\DataExporterNoamHaddad\DataExporterConfig.json
    ```
 2. Find these two lines:
    ```json
@@ -122,7 +121,7 @@ template, but **you must edit two values** before launching the pipeline.
 
 ## Step 5 — Launch and verify
 
-1. Go to `C:\WiresharkLogger\` and double-click **`Launch DataExporter.bat`**.
+1. Go to `C:\DataExporterNoamHaddad\` and double-click **`Launch DataExporter.bat`**.
 2. The launcher window opens. Switch to the **PROD** preset.
 3. Click **▶ START EVERYTHING**.
 4. Wait until you see **"Pipeline ready"** in the live log (~30-60 seconds).
@@ -141,7 +140,7 @@ problem is Step 4 (wrong DB name or SQL server address).
 When you receive an updated kit (e.g. with a newer `launcher.py`):
 
 1. Copy the new kit on top of the old one (overwrite).
-2. Re-run only **`2-deploy-project.ps1`**.
+2. Re-run only **`INSTALL-2-deploy.bat`**.
 3. Your `DataExporterConfig.json` is preserved.
 4. Re-launch.
 
@@ -150,16 +149,20 @@ When you receive an updated kit (e.g. with a newer `launcher.py`):
 ## Troubleshooting
 
 ### "Running scripts is disabled on this system"
-Windows blocks PowerShell scripts by default. Open PowerShell as Admin and run:
-```powershell
-Set-ExecutionPolicy -Scope LocalMachine RemoteSigned -Force
-```
+You should not see this if you use the `.bat` wrappers (they bypass the
+policy automatically). If you ran the `.ps1` directly and saw this error,
+either:
+  - Use `INSTALL-1-prereqs.bat` / `INSTALL-2-deploy.bat` instead, OR
+  - Open PowerShell as Administrator and run:
+    ```powershell
+    Set-ExecutionPolicy -Scope LocalMachine RemoteSigned -Force
+    ```
 
-### `1-install-prereqs.ps1` fails on Python install
+### `INSTALL-1-prereqs.bat` fails on Python install
 Reboot the PC and retry. If still fails, see `data-exporter\docs\INSTALL-PROD.md`
 section "Phase 3.1 Python" to install manually with the GUI installer.
 
-### `2-deploy-project.ps1` fails with "pip install failed"
+### `INSTALL-2-deploy.bat` fails with "pip install failed"
 Usually means a wheel is missing from `python-offline-packages\`. Verify
 the folder has 15 `.whl` files (see `MANIFEST.md`).
 
@@ -173,7 +176,7 @@ The launcher's `Reset Kafka state at start` checkbox should prevent this.
 Make sure it's checked in the PROD preset (it's the default).
 
 ### Need a clean restart of just the project
-Re-run `2-deploy-project.ps1`. It wipes and recreates everything except
+Re-run `INSTALL-2-deploy.bat`. It wipes and recreates everything except
 your `DataExporterConfig.json`.
 
 ---
