@@ -21,6 +21,7 @@ when running from a PyInstaller bundle. In source mode uses .venv\\Scripts\\pyth
 
 import json
 import os
+import shutil
 import signal
 import socket
 import struct
@@ -37,7 +38,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPushButton, QRadioButton,
     QButtonGroup, QPlainTextEdit, QGroupBox, QFrame,
-    QSizePolicy, QMessageBox,
+    QSizePolicy, QMessageBox, QCheckBox,
 )
 
 
@@ -63,7 +64,9 @@ LOG_PATH = PROJECT_ROOT / "dis-kafka.log"
 # Kafka install (assumed C:\kafka, Java auto-detected from common paths)
 KAFKA_HOME = Path("C:/kafka")
 KAFKA_START_BAT = KAFKA_HOME / "bin" / "windows" / "kafka-server-start.bat"
+KAFKA_STORAGE_BAT = KAFKA_HOME / "bin" / "windows" / "kafka-storage.bat"
 KAFKA_SERVER_PROPS = KAFKA_HOME / "config" / "kraft" / "server.properties"
+KAFKA_KRAFT_LOGS = KAFKA_HOME / "kraft-logs"
 
 
 def _find_java_home():
@@ -92,8 +95,8 @@ JAVA_HOME = _find_java_home() or r"C:\Program Files\Eclipse Adoptium\jdk-17.0.18
 # Defaults
 # ---------------------------------------------------------------------------
 DEFAULT_PRESETS = {
-    "dev":  {"exercise_id": 9,  "port": 3000, "logger_file": "exp_dev_1.lzma",  "database_name": "noamtest"},
-    "prod": {"exercise_id": 21, "port": 3001, "logger_file": "exp_prod_1.lzma", "database_name": "prod_db"},
+    "dev":  {"exercise_id": 9,  "port": 3000, "logger_file": "exp_dev_1.lzma",  "database_name": "noamtest", "nuke_kafka_on_start": True},
+    "prod": {"exercise_id": 21, "port": 3001, "logger_file": "exp_prod_1.lzma", "database_name": "prod_db",  "nuke_kafka_on_start": False},
     "_meta": {"theme": "light", "active_mode": "prod"},
 }
 
@@ -327,7 +330,7 @@ def build_fire_pdu(event_number, exercise_id, ts):
         struct.pack('!BBBBIHH', 7, exercise_id, 2, 2, ts, PDU_LENGTH, 0)
         + struct.pack('!HHHHHH', 1, 3101, 1, 1, 3101, 2)        # firing/target entityID
         + struct.pack('!HHH', 1, 3101, 100)                       # munitionExpendableID
-        + struct.pack('!HHH', 1, 3101, event_number)              # eventID
+        + struct.pack('!HHH', 1, 3101, event_number & 0xFFFF)     # eventID (uint16, wraps)
         + struct.pack('!I', event_number)                         # fireMissionIndex
         + struct.pack('!ddd', 4429530.0, 3094568.0, 3320580.0)    # location
         + struct.pack('!BBHBBBBHHHH', 2, 2, 105, 1, 1, 1, 0, 1000, 100, 1, 1)  # descriptor
@@ -505,12 +508,19 @@ class StartSequenceWorker(QThread):
                 pass
 
             # Step 2: start Kafka if not already running
+            nuke_requested = bool(self.active_preset.get("nuke_kafka_on_start", False))
+
             if _port_open("localhost", KAFKA_PORT, 0.5):
-                self.progress.emit("Kafka broker already running on port 9092 -- reusing")
+                if nuke_requested:
+                    # Safety: never wipe a broker that's already serving traffic.
+                    self.progress.emit(
+                        "WARNING: nuke_kafka_on_start=true but Kafka is already "
+                        "running on 9092 -- skipping reset, reusing existing broker"
+                    )
+                else:
+                    self.progress.emit("Kafka broker already running on port 9092 -- reusing")
                 self.status_update.emit("kafka", "up")
             else:
-                self.progress.emit("Starting Kafka broker...")
-                self.status_update.emit("kafka", "starting")
                 if not KAFKA_START_BAT.exists():
                     self.finished_fail.emit(f"Kafka not found at {KAFKA_HOME} -- install required")
                     return
@@ -520,6 +530,79 @@ class StartSequenceWorker(QThread):
                 env = os.environ.copy()
                 env["JAVA_HOME"] = JAVA_HOME
                 env["PATH"] = str(Path(JAVA_HOME) / "bin") + os.pathsep + env.get("PATH", "")
+
+                if nuke_requested:
+                    # Wipe kraft-logs and reformat storage. This is the only
+                    # reliable way to escape the chronic Windows "log dirs have
+                    # failed" bug caused by zombie .log.deleted files left over
+                    # from a previous run.
+                    self.progress.emit("Resetting Kafka state (nuke kraft-logs)...")
+                    try:
+                        shutil.rmtree(KAFKA_KRAFT_LOGS, ignore_errors=False)
+                        self.progress.emit(f"Removed {KAFKA_KRAFT_LOGS}")
+                    except FileNotFoundError:
+                        # Already absent -- nothing to remove, that's fine.
+                        self.progress.emit(f"{KAFKA_KRAFT_LOGS} not present (nothing to remove)")
+                    except OSError as exc:
+                        self.finished_fail.emit(
+                            f"Failed to reset Kafka state: {exc}. "
+                            f"Close any process holding {KAFKA_KRAFT_LOGS} and retry."
+                        )
+                        return
+
+                    if not KAFKA_STORAGE_BAT.exists():
+                        self.finished_fail.emit(
+                            f"kafka-storage.bat not found at {KAFKA_STORAGE_BAT} -- install required"
+                        )
+                        return
+
+                    # Generate a fresh cluster UUID
+                    self.progress.emit("Generating new Kafka cluster UUID...")
+                    try:
+                        uuid_proc = subprocess.run(
+                            [str(KAFKA_STORAGE_BAT), "random-uuid"],
+                            env=env,
+                            cwd=str(KAFKA_HOME),
+                            capture_output=True,
+                            text=True,
+                            check=True,
+                            timeout=30,
+                        )
+                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+                        self.finished_fail.emit(f"Failed to generate Kafka cluster UUID: {exc}")
+                        return
+                    # The bat prints the UUID on its last non-empty line.
+                    uuid_lines = [ln.strip() for ln in uuid_proc.stdout.splitlines() if ln.strip()]
+                    if not uuid_lines:
+                        self.finished_fail.emit("kafka-storage.bat random-uuid returned no output")
+                        return
+                    cluster_uuid = uuid_lines[-1]
+                    self.progress.emit(f"Cluster UUID: {cluster_uuid}")
+
+                    # Format the storage directory
+                    self.progress.emit("Formatting Kafka storage...")
+                    try:
+                        subprocess.run(
+                            [str(KAFKA_STORAGE_BAT), "format",
+                             "--config", str(KAFKA_SERVER_PROPS),
+                             "--cluster-id", cluster_uuid],
+                            env=env,
+                            cwd=str(KAFKA_HOME),
+                            capture_output=True,
+                            text=True,
+                            check=True,
+                            timeout=60,
+                        )
+                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+                        stderr_tail = ""
+                        if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
+                            stderr_tail = f" -- stderr: {exc.stderr.strip()[:300]}"
+                        self.finished_fail.emit(f"Failed to format Kafka storage: {exc}{stderr_tail}")
+                        return
+                    self.progress.emit("Kafka storage formatted -- ready to start broker")
+
+                self.progress.emit("Starting Kafka broker...")
+                self.status_update.emit("kafka", "starting")
                 self.kafka_proc = subprocess.Popen(
                     [str(KAFKA_START_BAT), str(KAFKA_SERVER_PROPS)],
                     env=env,
@@ -741,6 +824,7 @@ class LauncherWindow(QMainWindow):
                              or DEFAULT_PRESETS[self.active_mode]["logger_file"],
             "database_name": self.fld_db.text().strip()
                              or DEFAULT_PRESETS[self.active_mode]["database_name"],
+            "nuke_kafka_on_start": self.fld_nuke.isChecked(),
         }
 
     @staticmethod
@@ -820,6 +904,12 @@ class LauncherWindow(QMainWindow):
         cfg_grid.addWidget(self.fld_port,     1, 1)
         cfg_grid.addWidget(self.fld_logger,   2, 1)
         cfg_grid.addWidget(self.fld_db,       3, 1)
+        self.fld_nuke = QCheckBox("Reset Kafka state at start (nuke kraft-logs)")
+        self.fld_nuke.setToolTip(
+            "Wipes C:\\kafka\\kraft-logs before starting Kafka. "
+            "Recommended in DEV; risky in PROD (loses unconsumed messages)."
+        )
+        cfg_grid.addWidget(self.fld_nuke, 4, 0, 1, 2)
         hint = QLabel(
             "<span style='color:#95a5a6;font-size:9pt;'>"
             "Switch above to edit the other preset. Both presets are stored separately in "
@@ -827,7 +917,7 @@ class LauncherWindow(QMainWindow):
             "</span>"
         )
         hint.setWordWrap(True)
-        cfg_grid.addWidget(hint, 4, 0, 1, 2)
+        cfg_grid.addWidget(hint, 5, 0, 1, 2)
         root.addWidget(self.cfg_box)
 
         self.cfg_actions_widget = QWidget()
@@ -941,6 +1031,10 @@ class LauncherWindow(QMainWindow):
         self.fld_port.setText(str(d.get("port", DEFAULT_PRESETS[mode]["port"])))
         self.fld_logger.setText(str(d.get("logger_file", DEFAULT_PRESETS[mode]["logger_file"])))
         self.fld_db.setText(str(d.get("database_name", DEFAULT_PRESETS[mode]["database_name"])))
+        self.fld_nuke.setChecked(bool(d.get(
+            "nuke_kafka_on_start",
+            DEFAULT_PRESETS[mode].get("nuke_kafka_on_start", False),
+        )))
         self.cfg_box.setTitle(f"{mode.upper()} preset")
 
     # --- Theme ---

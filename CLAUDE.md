@@ -2,7 +2,7 @@
 
 > **Pour toi (Noam)** : ce fichier est chargé automatiquement par Claude au début de chaque session sur ce projet. C'est ma "mémoire externe" pour reprendre exactement là où on en est, même si la conversation est réinitialisée. Je m'engage à le tenir à jour à la fin de chaque session significative.
 
-> **Dernière mise à jour** : 2026-04-27 (Launch DataExporter.bat ajouté, build PyInstaller écarté)
+> **Dernière mise à jour** : 2026-04-29 (`nuke_kafka_on_start` ajouté au launcher)
 
 ---
 
@@ -68,6 +68,11 @@ Source archive gardée localement : `C:\DataExporter-prod-test\opendis-source\op
 ---
 
 ## 4. Décisions clés (chronologique, plus récente en premier)
+
+### 2026-04-29
+- **`nuke_kafka_on_start` ajouté** au launcher (per-mode dans `LauncherPresets.json`). Quand `true`, le launcher fait `rmtree(C:\kafka\kraft-logs)` + `kafka-storage.bat format` avant de démarrer Kafka. Défaut **true en DEV**, **false en PROD**.
+- **Pourquoi** : le `fresh-start mode` (côté consumer) ne protège pas du bug Windows `.log.deleted` qui survit *entre les runs*. Un fichier zombie de la veille fait planter Kafka ~30s après chaque démarrage suivant. Cause vue empiriquement le 2026-04-29 (segment `dis.raw-1/00000000000000000000.log.deleted` daté 2026-04-27).
+- **Comportement de sécurité** : si Kafka tourne déjà sur 9092, on **n'appplique pas** le reset (warning log + reuse).
 
 ### 2026-04-27 (suite 2)
 - **Logger_file naming sous contrôle du launcher** (commit à venir) :
@@ -178,6 +183,8 @@ Sous-agents (`.claude/agents/`) :
 Quand Kafka essaie de supprimer des segments physiques (`.deleted`), Windows tient parfois encore les handles ouverts (antivirus, indexer) → `AccessDeniedException` → `Shutdown broker because all log dirs have failed`.
 
 **Mitigation** : ne jamais utiliser `kafka-topics --delete` ou nuker `kraft-logs` sans précaution. Le **fresh-start mode** (`reset_topic_on_startup: true`) évite complètement ce risque parce qu'il ne supprime rien.
+
+**Nuance importante** : le bug peut survivre **entre les runs** via des fichiers `.log.deleted` zombies laissés sur disque. Le `fresh-start mode` (côté consumer) n'agit pas dessus. Pour s'en protéger automatiquement, le launcher a maintenant `nuke_kafka_on_start` (cf section 4, 2026-04-29) qui efface `kraft-logs` à chaque démarrage si activé.
 
 **Reset nucléaire** (si vraiment bloqué) :
 ```powershell

@@ -125,8 +125,8 @@ def build_fire_pdu(event_number: int, timestamp: int) -> bytes:
     #    eventNumber (H)
     # ----------------------------------------------------------
     event_id = struct.pack('!HHH',
-        EVENT_SITE, EVENT_APP, event_number,
-    )  # -> 6 bytes
+        EVENT_SITE, EVENT_APP, event_number & 0xFFFF,
+    )  # -> 6 bytes (eventNumber is uint16 in DIS, wraps past 65535)
 
     # ----------------------------------------------------------
     # 6. fireMissionIndex -- 4 bytes
