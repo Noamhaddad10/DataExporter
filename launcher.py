@@ -96,7 +96,7 @@ JAVA_HOME = _find_java_home() or r"C:\Program Files\Eclipse Adoptium\jdk-17.0.18
 # ---------------------------------------------------------------------------
 DEFAULT_PRESETS = {
     "dev":  {"exercise_id": 9,  "port": 3000, "logger_file": "exp_dev_1.lzma",  "database_name": "noamtest", "nuke_kafka_on_start": True},
-    "prod": {"exercise_id": 21, "port": 3001, "logger_file": "exp_prod_1.lzma", "database_name": "prod_db",  "nuke_kafka_on_start": False},
+    "prod": {"exercise_id": 21, "port": 3001, "logger_file": "exp_prod_1.lzma", "database_name": "prod_db",  "nuke_kafka_on_start": True},
     "_meta": {"theme": "light", "active_mode": "prod"},
 }
 

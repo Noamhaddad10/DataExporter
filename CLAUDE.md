@@ -70,9 +70,11 @@ Source archive gardée localement : `C:\DataExporter-prod-test\opendis-source\op
 ## 4. Décisions clés (chronologique, plus récente en premier)
 
 ### 2026-04-29
-- **`nuke_kafka_on_start` ajouté** au launcher (per-mode dans `LauncherPresets.json`). Quand `true`, le launcher fait `rmtree(C:\kafka\kraft-logs)` + `kafka-storage.bat format` avant de démarrer Kafka. Défaut **true en DEV**, **false en PROD**.
+- **`nuke_kafka_on_start` ajouté** au launcher (per-mode dans `LauncherPresets.json`). Quand `true`, le launcher fait `rmtree(C:\kafka\kraft-logs)` + `kafka-storage.bat format` avant de démarrer Kafka. Défaut **true en DEV et en PROD**.
 - **Pourquoi** : le `fresh-start mode` (côté consumer) ne protège pas du bug Windows `.log.deleted` qui survit *entre les runs*. Un fichier zombie de la veille fait planter Kafka ~30s après chaque démarrage suivant. Cause vue empiriquement le 2026-04-29 (segment `dis.raw-1/00000000000000000000.log.deleted` daté 2026-04-27).
 - **Comportement de sécurité** : si Kafka tourne déjà sur 9092, on **n'appplique pas** le reset (warning log + reuse).
+- **Pourquoi PROD aussi à `true`** (décidé après discussion 2026-04-29) : le `fresh-start mode` force déjà `auto.offset.reset=latest` avec un `group_id` neuf à chaque start, donc même nuke=OFF, les messages d'avant-crash sont ignorés par le pipeline. Garder kraft-logs n'a de valeur **que pour la forensique post-crash** (extraction manuelle via `kafka-console-consumer`). Si un opérateur prod veut faire ça, il décoche la case avant la relance.
+- **Fix annexe** : `event_number` dans le DEV FirePdu sender (launcher + tools/send_fire_pdu.py) wrappé via `& 0xFFFF`. Avant : crash `'H' format requires 0 <= number <= 65535` au-delà de 65535 messages dans un burst (eventNumber est uint16 dans le standard DIS).
 
 ### 2026-04-27 (suite 2)
 - **Logger_file naming sous contrôle du launcher** (commit à venir) :
