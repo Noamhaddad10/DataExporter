@@ -2,7 +2,7 @@
 
 > **Pour toi (Noam)** : ce fichier est chargé automatiquement par Claude au début de chaque session sur ce projet. C'est ma "mémoire externe" pour reprendre exactement là où on en est, même si la conversation est réinitialisée. Je m'engage à le tenir à jour à la fin de chaque session significative.
 
-> **Dernière mise à jour** : 2026-04-29 (`nuke_kafka_on_start` ajouté au launcher)
+> **Dernière mise à jour** : 2026-04-29 (scripts d'install prod automatisés `deploy/`)
 
 ---
 
@@ -68,6 +68,15 @@ Source archive gardée localement : `C:\DataExporter-prod-test\opendis-source\op
 ---
 
 ## 4. Décisions clés (chronologique, plus récente en premier)
+
+### 2026-04-29 (suite)
+- **Scripts d'install prod automatisés** ajoutés sous `deploy/` (mirror dans le kit USB) :
+  - `1-install-prereqs.ps1` (admin, run once) : install silencieux Python 3.10 + Java 17 + Kafka 3.9.0 + ODBC 17, idempotent (skip si déjà installé).
+  - `2-deploy-project.ps1` (no admin, re-runnable) : wipe + recopie projet, venv, `pip install --no-index --find-links ../python-offline-packages/`, smoke test imports + AggregateStatePdu, format Kafka storage si premier run. Préserve `DataExporterConfig.json` si l'opérateur l'a édité.
+  - `INSTALL-START-HERE.md` : walkthrough en anglais pour l'opérateur sur prod (~5 min de manip humaine totale).
+- **Test E2E réussi** : `2-deploy-project.ps1` exécuté sur `C:\DataExporter-prod-test\install-test-clean\` avec succès — install offline 15 wheels + smoke test imports OK.
+- **Commenté en anglais uniquement** dans `deploy/` (le repo doit être lisible par n'importe qui qui reprendrait le projet).
+- Mirror manuel `deploy/` ↔ `transfer-kit/` : pas de sync automatique aujourd'hui, à scripter un jour si la fréquence d'update augmente.
 
 ### 2026-04-29
 - **`nuke_kafka_on_start` ajouté** au launcher (per-mode dans `LauncherPresets.json`). Quand `true`, le launcher fait `rmtree(C:\kafka\kraft-logs)` + `kafka-storage.bat format` avant de démarrer Kafka. Défaut **true en DEV et en PROD**.
@@ -147,6 +156,7 @@ Source archive gardée localement : `C:\DataExporter-prod-test\opendis-source\op
 |---|---|
 | **Code projet (dev)** | `C:\Users\hadda\Desktop\WiresharkLogger\` |
 | **GUI launcher (dev)** | `C:\Users\hadda\Desktop\WiresharkLogger\launcher.py` (Tkinter NON, PyQt5) |
+| **Scripts deploy prod** | `C:\Users\hadda\Desktop\WiresharkLogger\deploy\` (versionné, anglais) — mirror manuel vers `transfer-kit/` |
 | **Presets launcher** | `C:\Users\hadda\Desktop\WiresharkLogger\LauncherPresets.json` (gitignoré) |
 | **Repo GitHub** | https://github.com/Noamhaddad10/DataExporter |
 | **venv dev** | `C:\Users\hadda\Desktop\WiresharkLogger\.venv\` (Python 3.10.11) |
