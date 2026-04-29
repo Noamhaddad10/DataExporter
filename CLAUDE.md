@@ -2,7 +2,7 @@
 
 > **Pour toi (Noam)** : ce fichier est chargé automatiquement par Claude au début de chaque session sur ce projet. C'est ma "mémoire externe" pour reprendre exactement là où on en est, même si la conversation est réinitialisée. Je m'engage à le tenir à jour à la fin de chaque session significative.
 
-> **Dernière mise à jour** : 2026-04-29 (scripts d'install prod automatisés `deploy/`)
+> **Dernière mise à jour** : 2026-04-29 (rename prod folder + .bat wrappers + multi-thread sender)
 
 ---
 
@@ -68,6 +68,13 @@ Source archive gardée localement : `C:\DataExporter-prod-test\opendis-source\op
 ---
 
 ## 4. Décisions clés (chronologique, plus récente en premier)
+
+### 2026-04-29 (suite 2)
+- **Rename prod folder** : `C:\WiresharkLogger\` → **`C:\DataExporterNoamHaddad\`** (défaut `-ProjectDir` dans `2-deploy-project.ps1`, toutes les docs et `Launch DataExporter.bat` mises à jour). Le dossier dev sur le PC perso reste `C:\Users\hadda\Desktop\WiresharkLogger\` (toucher au venv là-dedans = path absolus embarqués, opération risquée séparée — laissée pour plus tard si jamais).
+- **`.bat` wrappers** ajoutés (`INSTALL-1-prereqs.bat`, `INSTALL-2-deploy.bat`) → l'opérateur prod **double-clique** au lieu de devoir faire clic-droit "Run with PowerShell". Ils invoquent `powershell.exe -ExecutionPolicy Bypass` pour éviter le problème "running scripts is disabled" sans toucher la policy système. `INSTALL-1` détecte aussi proprement si l'utilisateur a oublié "Run as administrator" et exit avec un message clair.
+- **Preflight `tar.exe`** ajouté en tête de `1-install-prereqs.ps1` → fail loud en 1 seconde si le PC est trop vieux (Windows 10 < 1803 d'avril 2018), au lieu d'exploser après 20 min d'install Python/Java.
+- **Multi-thread DEV FirePdu sender** : nouvelle classe `ParallelFirePduSender` (orchestrateur QObject) dans `launcher.py`, champ UI "× N threads" (1-8) à côté de count/rate. Chaque worker a son propre socket UDP, sa fraction du count, sa fraction du rate, et un `event_offset` non-overlappant pour éviter les collisions uint16. **Pourquoi** : sender plafonnait à ~2-3k msg/s sur le laptop (CPU-bound mono-core, GIL contesté avec le thread GUI). Multi-thread casse ce plafond, le user a validé empiriquement.
+- **Fix `WinError 5 Access denied`** dans la logique nuke : Kafka laisse parfois des fichiers `.checkpoint` en read-only après un shutdown brutal. `shutil.rmtree` standard refuse de les supprimer sur Windows. Ajouté un callback `onerror` qui strippe l'attribut read-only via `os.chmod(path, stat.S_IWRITE)` et retry. Idiom standard Python+Windows.
 
 ### 2026-04-29 (suite)
 - **Scripts d'install prod automatisés** ajoutés sous `deploy/` (mirror dans le kit USB) :
@@ -162,7 +169,8 @@ Source archive gardée localement : `C:\DataExporter-prod-test\opendis-source\op
 | **venv dev** | `C:\Users\hadda\Desktop\WiresharkLogger\.venv\` (Python 3.10.11) |
 | **Kafka local dev** | `C:\kafka\` (port 9092) |
 | **Kafka local TEST** | `C:\kafka-test\` (port 9192, instance dédiée pour smoke tests) |
-| **Transfer kit (prêt USB)** | `C:\DataExporter-prod-test\transfer-kit\` (~355 MB) |
+| **Transfer kit (prêt USB)** | `C:\DataExporter-prod-test\transfer-kit\` (~410 MB) |
+| **Cible projet sur prod** | `C:\DataExporterNoamHaddad\` (créé par `INSTALL-2-deploy.bat`) |
 | **Source opendis custom** | `C:\DataExporter-prod-test\opendis-source\open-dis-python-9911bcf9...` |
 | **Install-test (offline simulation)** | `C:\DataExporter-prod-test\install-test-clean\` |
 | **Guides perso (FR)** | `C:\Users\hadda\Desktop\GUIDE-INSTALL-PROD.html` + `.md` |
@@ -198,6 +206,8 @@ Quand Kafka essaie de supprimer des segments physiques (`.deleted`), Windows tie
 
 **Nuance importante** : le bug peut survivre **entre les runs** via des fichiers `.log.deleted` zombies laissés sur disque. Le `fresh-start mode` (côté consumer) n'agit pas dessus. Pour s'en protéger automatiquement, le launcher a maintenant `nuke_kafka_on_start` (cf section 4, 2026-04-29) qui efface `kraft-logs` à chaque démarrage si activé.
 
+**Sous-cas read-only** : Kafka laisse aussi parfois des fichiers `.checkpoint` en read-only après un shutdown brutal. `shutil.rmtree` standard plante avec `WinError 5: Access is denied`. La logique nuke du launcher gère ça via un callback `onerror` qui strippe l'attribut via `os.chmod(path, stat.S_IWRITE)` et retry. Si tu fais le reset à la main, utilise plutôt `Remove-Item -Recurse -Force` qui fait l'équivalent.
+
 **Reset nucléaire** (si vraiment bloqué) :
 ```powershell
 Remove-Item -Recurse -Force C:\kafka\kraft-logs
@@ -221,6 +231,8 @@ Les fichiers ont des fonctions `test_*` mais avec des signatures custom (`test_X
 - [ ] **Décision sur perte mesurée en prod** : si jamais un scénario perd des messages (vérifié par `Σ Consumer.consumed != Producer.sent`), passer à 3 brokers Kafka + `replication-factor=3` + `min.insync.replicas=2`. Configuration documentée dans la conversation passée et le guide HTML.
 - [ ] **Refacto `run_consumer`** (281 lignes, `kafka_consumer.py:45`) : signalé par audit v3/v4, pas urgent, à faire si on attaque le batching SQL plus tard.
 - [ ] **Migration tests vers pytest** : signalé par audit v3/v4, pas urgent.
+- [ ] **Renommer le dossier dev** `C:\Users\hadda\Desktop\WiresharkLogger\` → quelque chose qui matche le nom prod (`DataExporterNoamHaddad`) : différé, parce que le venv embarque des chemins absolus → faudrait recréer le venv (5 min) + remettre à jour `LauncherPresets.json` + tout outil qui pointe vers ce path. Utile mais pas bloquant.
+- [ ] **Sync auto `deploy/` ↔ `transfer-kit/`** : pour l'instant je copie à la main les fichiers modifiés sous `deploy/` vers le kit. Un petit `sync-kit.ps1` qui fait l'équivalent serait utile si la fréquence de modif augmente.
 
 ---
 
