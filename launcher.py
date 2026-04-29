@@ -24,6 +24,7 @@ import os
 import shutil
 import signal
 import socket
+import stat
 import struct
 import subprocess
 import sys
@@ -31,7 +32,7 @@ import time
 import urllib.parse
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QObject, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget,
@@ -347,13 +348,18 @@ class FirePduSender(QThread):
     done = pyqtSignal(int, float)     # (count, elapsed_seconds)
     failed = pyqtSignal(str)
 
-    def __init__(self, host, port, exercise_id, count, rate_per_sec, parent=None):
+    def __init__(self, host, port, exercise_id, count, rate_per_sec,
+                 event_offset=0, parent=None):
         super().__init__(parent)
         self.host = host
         self.port = int(port)
         self.exercise_id = int(exercise_id)
         self.count = int(count)
         self.rate = max(0.1, float(rate_per_sec))
+        # event_offset shifts the eventNumber range so parallel workers
+        # don't collide on the uint16 wrap (orchestrator hands each worker
+        # a non-overlapping slice).
+        self.event_offset = int(event_offset)
         self._running = True
 
     def stop(self):
@@ -371,7 +377,8 @@ class FirePduSender(QThread):
             for i in range(1, self.count + 1):
                 if not self._running:
                     break
-                pkt = build_fire_pdu(i, self.exercise_id, (base_ts + i) & 0xFFFFFFFF)
+                ev = self.event_offset + i
+                pkt = build_fire_pdu(ev, self.exercise_id, (base_ts + ev) & 0xFFFFFFFF)
                 sock.sendto(pkt, (self.host, self.port))
                 if i % update_every == 0 or i == self.count:
                     self.progress.emit(i, self.count)
@@ -385,6 +392,87 @@ class FirePduSender(QThread):
             self.done.emit(min(self.count, i), elapsed)
         except Exception as exc:
             self.failed.emit(str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator: spawns N FirePduSender QThreads in parallel and aggregates
+# their progress/done/failed signals into one unified API.
+#
+# Why parallel: a single Python loop is CPU-bound around 2-3k msg/s on a
+# laptop (struct.pack overhead + GIL contention with the GUI thread).
+# Splitting the burst across N threads lets each saturate one core and
+# scales the achievable rate by ~N (up to the network/pipeline ceiling).
+#
+# Each worker:
+#  - has its own UDP socket
+#  - sends count/N messages at rate/N msg/sec
+#  - uses a non-overlapping eventNumber slice (event_offset)
+# ---------------------------------------------------------------------------
+class ParallelFirePduSender(QObject):
+    progress = pyqtSignal(int, int)   # (total_sent, total_count)
+    done = pyqtSignal(int, float)     # (total_sent, max_elapsed_seconds)
+    failed = pyqtSignal(str)
+
+    def __init__(self, host, port, exercise_id, count, rate_per_sec,
+                 parallelism, parent=None):
+        super().__init__(parent)
+        self.total_count = int(count)
+        parallelism = max(1, int(parallelism))
+
+        base, remainder = divmod(self.total_count, parallelism)
+        rate_split = max(0.1, float(rate_per_sec) / parallelism)
+
+        self.workers = []
+        offset = 0
+        for k in range(parallelism):
+            cnt = base + (1 if k < remainder else 0)
+            if cnt == 0:
+                continue
+            w = FirePduSender(
+                host, port, exercise_id, cnt, rate_split,
+                event_offset=offset,
+            )
+            offset += cnt
+            self.workers.append(w)
+
+        n = len(self.workers)
+        self._worker_progress = [0] * n
+        self._worker_done = [False] * n
+        self._worker_elapsed = [0.0] * n
+        self._failed_emitted = False
+
+        for k, w in enumerate(self.workers):
+            w.progress.connect(lambda sent, total, k=k: self._on_worker_progress(k, sent))
+            w.done.connect(lambda c, e, k=k: self._on_worker_done(k, c, e))
+            w.failed.connect(self._on_worker_failed)
+
+    def start(self):
+        for w in self.workers:
+            w.start()
+
+    def stop(self):
+        for w in self.workers:
+            w.stop()
+
+    def isRunning(self):
+        return any(w.isRunning() for w in self.workers)
+
+    def _on_worker_progress(self, k, sent):
+        self._worker_progress[k] = sent
+        self.progress.emit(sum(self._worker_progress), self.total_count)
+
+    def _on_worker_done(self, k, count, elapsed):
+        self._worker_progress[k] = count
+        self._worker_elapsed[k] = elapsed
+        self._worker_done[k] = True
+        if all(self._worker_done):
+            self.done.emit(sum(self._worker_progress), max(self._worker_elapsed))
+
+    def _on_worker_failed(self, msg):
+        if self._failed_emitted:
+            return
+        self._failed_emitted = True
+        self.failed.emit(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -537,8 +625,19 @@ class StartSequenceWorker(QThread):
                     # failed" bug caused by zombie .log.deleted files left over
                     # from a previous run.
                     self.progress.emit("Resetting Kafka state (nuke kraft-logs)...")
+
+                    def _force_remove_readonly(func, path, exc_info):
+                        # Windows refuses to delete read-only files. Kafka leaves
+                        # some .checkpoint files in that state after an abrupt
+                        # shutdown. Strip the bit and retry once.
+                        try:
+                            os.chmod(path, stat.S_IWRITE)
+                            func(path)
+                        except OSError:
+                            raise
+
                     try:
-                        shutil.rmtree(KAFKA_KRAFT_LOGS, ignore_errors=False)
+                        shutil.rmtree(KAFKA_KRAFT_LOGS, onerror=_force_remove_readonly)
                         self.progress.emit(f"Removed {KAFKA_KRAFT_LOGS}")
                     except FileNotFoundError:
                         # Already absent -- nothing to remove, that's fine.
@@ -979,19 +1078,27 @@ class LauncherWindow(QMainWindow):
         self.fld_send_rate = QLineEdit("50")
         self.fld_send_rate.setFixedWidth(80)
         dev_grid.addWidget(self.fld_send_rate, 0, 3)
-        dev_grid.addWidget(QLabel("msg/sec"), 0, 4)
-        dev_grid.addWidget(QWidget(), 0, 5)  # spacer
+        dev_grid.addWidget(QLabel("msg/sec  ×"), 0, 4)
+        self.fld_send_parallel = QLineEdit("1")
+        self.fld_send_parallel.setFixedWidth(50)
+        self.fld_send_parallel.setToolTip(
+            "Number of parallel sender threads (1-8). Use >1 to bypass "
+            "the per-core Python ceiling (~2-3k msg/s on this laptop). "
+            "Total count and rate are split evenly across threads."
+        )
+        dev_grid.addWidget(self.fld_send_parallel, 0, 5)
+        dev_grid.addWidget(QLabel("threads"), 0, 6)
 
         self.send_btn = QPushButton("▶  Send PDUs")
         self.send_btn.clicked.connect(self._on_send_pdus)
-        dev_grid.addWidget(self.send_btn, 0, 6)
+        dev_grid.addWidget(self.send_btn, 0, 7)
 
         self.send_progress_label = QLabel(
             "<span style='color:#7f8c8d;font-size:9pt;'>"
             "PDUs are sent over UDP to localhost on the active port."
             "</span>"
         )
-        dev_grid.addWidget(self.send_progress_label, 1, 0, 1, 7)
+        dev_grid.addWidget(self.send_progress_label, 1, 0, 1, 8)
 
         root.addWidget(self.dev_tools_box)
         self.dev_tools_box.hide()
@@ -1312,13 +1419,18 @@ class LauncherWindow(QMainWindow):
         try:
             count = int(self.fld_send_count.text().strip())
             rate = float(self.fld_send_rate.text().strip())
+            parallelism = int(self.fld_send_parallel.text().strip())
         except ValueError:
             QMessageBox.warning(self, "Invalid input",
-                                "Count must be an integer, rate must be a number (msg/sec).")
+                                "Count and threads must be integers, rate must be a number (msg/sec).")
             return
         if count <= 0 or rate <= 0:
             QMessageBox.warning(self, "Invalid input",
                                 "Count and rate must both be > 0.")
+            return
+        if parallelism < 1 or parallelism > 8:
+            QMessageBox.warning(self, "Invalid input",
+                                "Parallel threads must be between 1 and 8.")
             return
         if count > 1_000_000:
             QMessageBox.warning(self, "Too many",
@@ -1330,14 +1442,20 @@ class LauncherWindow(QMainWindow):
         exercise_id = int(active["exercise_id"])
 
         self.send_btn.setEnabled(False)
+        thread_suffix = "" if parallelism == 1 else f" across {parallelism} threads"
         self.send_progress_label.setText(
             f"<span style='color:#1a4d7c;font-size:9pt;'>"
-            f"Sending {count} FirePdus at {rate:.1f} msg/sec to localhost:{port}..."
+            f"Sending {count} FirePdus at {rate:.1f} msg/sec to localhost:{port}{thread_suffix}..."
             f"</span>"
         )
-        self._log(f"DEV: sending {count} FirePdus at {rate:.1f} msg/sec to localhost:{port}, exerciseID={exercise_id}")
+        self._log(
+            f"DEV: sending {count} FirePdus at {rate:.1f} msg/sec to localhost:{port}, "
+            f"exerciseID={exercise_id}, parallelism={parallelism}"
+        )
 
-        self.sender = FirePduSender("localhost", port, exercise_id, count, rate)
+        self.sender = ParallelFirePduSender(
+            "localhost", port, exercise_id, count, rate, parallelism,
+        )
         self.sender.progress.connect(self._on_send_progress)
         self.sender.done.connect(self._on_send_done)
         self.sender.failed.connect(self._on_send_failed)
